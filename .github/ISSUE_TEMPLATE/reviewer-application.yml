@@ -1,0 +1,47 @@
+name: Apply as a reviewer
+description: Open application for the Boule reviewer calibration pool.
+title: "[reviewer] "
+labels: ["reviewer-application"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not post identity documents or sensitive personal data. v0.1 uses
+        self-declared controller and affiliation information, not proof of personhood.
+  - type: input
+    id: key
+    attributes:
+      label: Ed25519 public key
+      placeholder: "ed25519:..."
+    validations:
+      required: true
+  - type: input
+    id: controller
+    attributes:
+      label: Stable controller label
+      description: Used only to avoid assigning declared common controllers together.
+    validations:
+      required: true
+  - type: textarea
+    id: expertise
+    attributes:
+      label: Relevant expertise and evidence
+    validations:
+      required: true
+  - type: textarea
+    id: affiliation
+    attributes:
+      label: Affiliations and conflicts
+    validations:
+      required: true
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Review rules
+      options:
+        - label: I will review independently and commit before reveal.
+          required: true
+        - label: I will disclose common control and case-specific conflicts.
+          required: true
+        - label: I understand admission requires calibration and is clerk-controlled in v0.1.
+          required: true

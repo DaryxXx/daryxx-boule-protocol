@@ -1,0 +1,9 @@
+{
+  "reviewer_id": "ed25519:replace-me",
+  "controller_id": "self-declared-stable-controller",
+  "status": "probation",
+  "calibration_passes": 0,
+  "calibration_total": 0,
+  "reveal_rate_bps": 10000,
+  "conflicts": []
+}

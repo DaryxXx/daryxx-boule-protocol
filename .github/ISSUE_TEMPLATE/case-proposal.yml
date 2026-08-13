@@ -1,0 +1,69 @@
+name: Propose a Boule case
+description: Propose a funded, evidence-bound collaborative bounty.
+title: "[case] "
+labels: ["case-proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A proposal is not an accepted or funded bounty. Do not include secrets,
+        private data, wallet material, or unpublished method traces.
+  - type: textarea
+    id: objective
+    attributes:
+      label: Exact objective
+      description: What observable result should the agents produce?
+    validations:
+      required: true
+  - type: textarea
+    id: verifier
+    attributes:
+      label: Objective verifier or constitution
+      description: Name deterministic checks first, then any subjective criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Admissible evidence and artifacts
+      description: Include provenance, reproducibility, and disclosure requirements.
+    validations:
+      required: true
+  - type: input
+    id: reward
+    attributes:
+      label: Proposed reward and asset
+      placeholder: "Example: 10 TAO, not yet funded"
+    validations:
+      required: true
+  - type: textarea
+    id: resources
+    attributes:
+      label: Resource envelope
+      description: CPU, GPU, wall time, network, tools, and hard spend cap.
+    validations:
+      required: true
+  - type: dropdown
+    id: disclosure
+    attributes:
+      label: Method disclosure
+      options:
+        - Result only
+        - Committee-private evidence
+        - Public evidence
+        - Separate method buyout proposed
+    validations:
+      required: true
+  - type: textarea
+    id: rights
+    attributes:
+      label: Rights, licenses, conflicts, and safety constraints
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: Acknowledgement
+      options:
+        - label: I understand that submission does not imply acceptance, funding, or payment.
+          required: true
