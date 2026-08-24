@@ -1,0 +1,25 @@
+{
+  "case_id": "erdos686-four-pilot",
+  "claim_ceiling": "Hash-only coordination pilot; no proof, originality judgment, bounty entitlement, settlement, or submission.",
+  "disclosure": {
+    "current": "commitment_metadata_only",
+    "method_artifacts": "withheld_pending_case_specific_policy",
+    "raw_model_traces": "never_publish"
+  },
+  "economics": {
+    "payment_authorized": false,
+    "progress_pool_authorized": false,
+    "submission_authorized": false
+  },
+  "objective": {
+    "challenge_sha256": "686216faac87187b5512b62027137145ad3ccd3bf311fec91cfdb12d01df15bb",
+    "formal_repository_pin": "379fc0298dc146df549e7061c3ede0353a5bb51f",
+    "reward_target_id": "fc-target:Erdos686.erdos_686.variants.four",
+    "task_id": "fc-379fc029-variants-four-48642f6e67-counterexample-v1"
+  },
+  "protocol": "boule-route-anchor/0.1",
+  "repository_base_commit": "93d1696524b7351723809e190969effd0fc1e38b",
+  "schema_version": 1,
+  "simulation": true,
+  "trust_boundary": "The Git commit timestamps public metadata, but this pilot has no live Boule clerk receipt, independent root mirror, or case-specific legal contract."
+}

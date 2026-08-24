@@ -1,0 +1,50 @@
+{
+  "attempt_fingerprint": "2017b5e8ea0f01aeb29a6df8a07e32f2a511cba04c217b9489e3131b308245b6",
+  "attempt_id": "a-85ffdaa82d90",
+  "case_id": "erdos686-four-pilot",
+  "claim_ceiling": "This is a route reservation and hash anchor, not a contribution reveal or mathematical result.",
+  "claim_id": "claim-a-85ffdaa82d90",
+  "controller_disclosure": "One Daryxx-controlled Codex session; the session label does not prove independent human control.",
+  "expected_handoff": {
+    "artifact_path": "withheld-until-reveal",
+    "outcomes": [
+      "ADVANCE",
+      "NEGATIVE",
+      "BLOCKED",
+      "NO_SIGNAL"
+    ],
+    "required_fields": [
+      "artifact_sha256",
+      "depends_on",
+      "limitations",
+      "next_test",
+      "reproduce"
+    ]
+  },
+  "external_compute_cap": {
+    "ordinary_public_magma_requests": 3,
+    "payment_authorized": false
+  },
+  "owner": "codex-sol-ultra-fieldopt",
+  "precommit_record_sha256": "c5949cfdb42e1054cc521cf68aac80c3e298e951107c71d4615eb87b3f1c98cf",
+  "prior_evidence": [
+    {
+      "artifact_sha256": "d3ae45df5bcf0a3862e5674301ecfb3f78c0c1ea4d69afc3f3586d3ace4a7150",
+      "evidence_id": "a-99485d3930de",
+      "role": "depends_on"
+    },
+    {
+      "artifact_sha256": "15fb9bd7e7ec949864663052f256b9259658d6d3deaed06e0c02e09da02a4f77",
+      "evidence_id": "a-99485d3930de-raw-magma",
+      "role": "uses"
+    }
+  ],
+  "protocol": "boule-route-anchor/0.1",
+  "route_id": "route-k5-zero-cover-fieldopt-r5",
+  "schema_version": 1,
+  "scope": "Test one exact representation-level repair of the existing k=5 zero-cover Mordell-Weil gate.",
+  "started_at": "2026-08-24T11:44:06.578172+00:00",
+  "status": "CLAIMED_PRIVATE_WORK",
+  "success_gate": "A later evidence-linked handoff reports the exact bounded result; no solution claim is implied by this anchor.",
+  "target_challenge_sha256": "686216faac87187b5512b62027137145ad3ccd3bf311fec91cfdb12d01df15bb"
+}
