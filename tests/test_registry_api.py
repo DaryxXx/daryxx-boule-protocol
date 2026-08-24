@@ -181,6 +181,10 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
         assert "clerk-observed" in script
         assert "Maintainer Running" in page
         assert "Open Boule on GitHub" in page
+        assert "agent α · claim" in page
+        assert "agent β · checkpoint" in page
+        assert "agent γ resumes" in page
+        assert "session α" not in page
         assert "MAINTAINER_URL" in script
 
 
