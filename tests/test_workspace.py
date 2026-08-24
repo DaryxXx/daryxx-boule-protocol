@@ -93,6 +93,110 @@ def heartbeat(w, s, received_at):
     )
 
 
+ARTIFACT = {"ref": "Solution.lean", "sha256": "sha256:" + "e" * 64}
+SUBMISSION_ID = "82ab85ee-5dfc-4775-b3e1-8abc16e213b9"
+
+
+def advance(w, s, received_at="2030-01-01T00:00:02Z", handoff_id="h-solution"):
+    set_time(w, received_at)
+    return w.append(
+        "handoff_published",
+        {
+            "problem_id": "p-1",
+            "participant_id": "a",
+            "session_id": "s-a",
+            "claim_id": "c-1",
+            "handoff_id": handoff_id,
+            "outcome": "ADVANCE",
+            "summary": "exact candidate",
+            "next_action": "seal the candidate",
+            "limitations": "awaits external checks",
+            "reproduce": "lake env lean Solution.lean",
+            "evidence": [ARTIFACT],
+            "depends_on": [],
+            "provenance": "original",
+            "citations": [],
+        },
+        s,
+    )
+
+
+def candidate_payload(candidate_id="candidate-1", handoff_id="h-solution"):
+    return {
+        "problem_id": "p-1",
+        "participant_id": "a",
+        "session_id": "s-a",
+        "candidate_id": candidate_id,
+        "handoff_ids": [handoff_id],
+        "task_id": "task-1",
+        "task_commitment": "sha256:" + "1" * 64,
+        "formal_repository_pin": "2" * 40,
+        "artifact": ARTIFACT,
+        "summary": "solves the pinned task",
+        "reproduce": "lake env lean Solution.lean",
+        "limitations": "external review still required",
+    }
+
+
+def submission_payload(candidate_id="candidate-1", submission_id=SUBMISSION_ID):
+    result_url = f"https://conjectures.io/results/{submission_id}"
+    return {
+        "problem_id": "p-1",
+        "candidate_id": candidate_id,
+        "submission_id": submission_id,
+        "task_id": "task-1",
+        "task_commitment": "sha256:" + "1" * 64,
+        "formal_repository_pin": "2" * 40,
+        "artifact_sha256": ARTIFACT["sha256"],
+        "submitted_at": "2030-01-01T00:00:04Z",
+        "public_result_url": result_url,
+        "source": "trusted-clerk/conjectures.io-submission",
+        "receipt": {"ref": result_url, "sha256": "sha256:" + "3" * 64},
+    }
+
+
+def feedback_payload(stage, decision, candidate_id="candidate-1", submission_id=SUBMISSION_ID):
+    result_url = f"https://conjectures.io/results/{submission_id}"
+    return {
+        "problem_id": "p-1",
+        "candidate_id": candidate_id,
+        "submission_id": submission_id,
+        "task_id": "task-1",
+        "task_commitment": "sha256:" + "1" * 64,
+        "formal_repository_pin": "2" * 40,
+        "artifact_sha256": ARTIFACT["sha256"],
+        "stage": stage,
+        "decision": decision,
+        "reason_code": f"TEST_{decision}",
+        "summary": f"official {stage} state observed as {decision}",
+        "next_action": "continue from the attached report",
+        "public_result_url": result_url,
+        "source": {
+            "verifier": "trusted-clerk/conjectures.io-lean-verifier",
+            "review": "trusted-clerk/conjectures.io-human-review",
+            "reward": "trusted-clerk/conjectures.io-reward-eligibility",
+        }[stage],
+        "report": {"ref": result_url, "sha256": "sha256:" + "4" * 64},
+    }
+
+
+def resolution_payload(review_event_id, candidate_id="candidate-1", submission_id=SUBMISSION_ID):
+    return {
+        "problem_id": "p-1",
+        "candidate_id": candidate_id,
+        "submission_id": submission_id,
+        "task_id": "task-1",
+        "task_commitment": "sha256:" + "1" * 64,
+        "formal_repository_pin": "2" * 40,
+        "artifact_sha256": ARTIFACT["sha256"],
+        "public_result_url": f"https://conjectures.io/results/{submission_id}",
+        "source": "trusted-clerk/conjectures.io-human-review",
+        "resolution": "SOLVED",
+        "review_event_id": review_event_id,
+        "note": "trusted clerk finalized the approved result",
+    }
+
+
 def test_import_chain_tamper_and_receipt_truncation(tmp_path):
     w, m, _, s, _, root = kit(tmp_path)
     original = (root / "problem.json").read_text()
@@ -277,8 +381,222 @@ def test_replay_rejects_a_validly_signed_second_handoff_on_closed_claim(tmp_path
         "event_hash": digest_object(unsigned),
         "signature": sign_object(session, unsigned),
     }
-    Workspace._write(
-        w.events_dir / f"{forged['seq']:08d}-{forged['event_id']}.json", forged, True
-    )
+    Workspace._write(w.events_dir / f"{forged['seq']:08d}-{forged['event_id']}.json", forged, True)
     with pytest.raises(ProtocolError, match="no longer open"):
         w.state("2030-01-01T00:00:04Z")
+
+
+def test_candidate_submission_verification_review_and_reward_are_separate(tmp_path):
+    w, maintainer, _, session, outsider, _ = kit(tmp_path)
+    claim(w, session)
+    advance(w, session)
+    set_time(w, "2030-01-01T00:00:03Z")
+    candidate_event = w.append("submission_candidate_published", candidate_payload(), session)
+    state = w.state("2030-01-01T00:00:03Z")
+    assert state["problem_status"] == "CANDIDATE_READY"
+    assert state["candidates"][0]["submission"] is None
+    assert state["candidates"][0]["reward"] is None
+
+    with pytest.raises(ProtocolError, match="only participant events"):
+        w.append("external_submission_receipted", submission_payload(), session)
+    with pytest.raises(ProtocolError, match="maintainer key"):
+        w.append_maintainer("external_submission_receipted", submission_payload(), outsider)
+
+    set_time(w, "2030-01-01T00:00:05Z")
+    w.append_maintainer("external_submission_receipted", submission_payload(), maintainer)
+    state = w.state("2030-01-01T00:00:05Z")
+    assert state["problem_status"] == "VERIFICATION_PENDING"
+    assert state["candidates"][0]["verifier"] is None
+    claim(w, session, "2030-01-01T00:00:06Z", "c-during-review")
+    set_time(w, "2030-01-01T00:00:06.500000Z")
+    w.append(
+        "claim_released",
+        {
+            "problem_id": "p-1",
+            "participant_id": "a",
+            "session_id": "s-a",
+            "claim_id": "c-during-review",
+            "reason": "review can remain pending without freezing independent research",
+        },
+        session,
+    )
+
+    set_time(w, "2030-01-01T00:00:07Z")
+    w.append_maintainer(
+        "candidate_feedback_recorded", feedback_payload("verifier", "VERIFIED"), maintainer
+    )
+    state = w.state("2030-01-01T00:00:07Z")
+    assert state["problem_status"] == "REVIEW_PENDING"
+    assert state["candidates"][0]["review"] is None
+    assert state["candidates"][0]["reward"] is None
+
+    set_time(w, "2030-01-01T00:00:08Z")
+    review_event = w.append_maintainer(
+        "candidate_feedback_recorded", feedback_payload("review", "APPROVED"), maintainer
+    )
+    state = w.state("2030-01-01T00:00:08Z")
+    assert state["problem_status"] == "ACCEPTANCE_RECORDED"
+    assert state["research_resume"]["action"] == "AWAIT_TRUSTED_CLERK_FINALIZATION"
+    assert state["candidates"][0]["reward"] is None
+
+    set_time(w, "2030-01-01T00:00:09Z")
+    with pytest.raises(ProtocolError, match="exact approved review"):
+        w.append_maintainer(
+            "case_resolution_recorded", resolution_payload("invented-review"), maintainer
+        )
+    with pytest.raises(ProtocolError, match="task identity"):
+        w.append_maintainer(
+            "case_resolution_recorded",
+            {
+                **resolution_payload(review_event["event_id"]),
+                "task_commitment": "sha256:" + "9" * 64,
+            },
+            maintainer,
+        )
+    with pytest.raises(ProtocolError, match="resolution source"):
+        w.append_maintainer(
+            "case_resolution_recorded",
+            {**resolution_payload(review_event["event_id"]), "source": "participant-self-report"},
+            maintainer,
+        )
+    w.append_maintainer(
+        "case_resolution_recorded", resolution_payload(review_event["event_id"]), maintainer
+    )
+    state = w.state("2030-01-01T00:00:09Z")
+    assert state["problem_status"] == "SOLVED"
+    assert state["research_resume"]["action"] == "STOP_RESEARCH_PRESERVE_EVIDENCE"
+    assert state["external_status_trust"]["authenticated_external_attestation"] is False
+    with pytest.raises(ProtocolError, match="not open"):
+        claim(w, session, "2030-01-01T00:00:10Z", "c-after-solved")
+
+    set_time(w, "2030-01-01T00:00:11Z")
+    w.append_maintainer(
+        "candidate_feedback_recorded", feedback_payload("reward", "ELIGIBLE"), maintainer
+    )
+    state = w.state("2030-01-01T00:00:11Z")
+    assert state["problem_status"] == "SOLVED"
+    assert state["candidates"][0]["reward"]["decision"] == "ELIGIBLE"
+    assert candidate_event["actor"] == public_key_text(session)
+
+
+def test_rejection_feedback_reopens_research_and_exact_retry_is_idempotent(tmp_path):
+    w, maintainer, _, session, _, _ = kit(tmp_path)
+    claim(w, session)
+    advance(w, session)
+    set_time(w, "2030-01-01T00:00:03Z")
+    w.append("submission_candidate_published", candidate_payload(), session)
+    with pytest.raises(ProtocolError, match="already sealed"):
+        w.append(
+            "submission_candidate_published",
+            {**candidate_payload("candidate-copy"), "summary": "duplicate under a new id"},
+            session,
+        )
+    set_time(w, "2030-01-01T00:00:05Z")
+    w.append_maintainer("external_submission_receipted", submission_payload(), maintainer)
+    rejected = feedback_payload("verifier", "REJECTED")
+    set_time(w, "2030-01-01T00:00:06Z")
+    first = w.append_maintainer("candidate_feedback_recorded", rejected, maintainer)
+    count = len(w._events())
+    set_time(w, "2030-01-01T00:00:07Z")
+    retry = w.append_maintainer("candidate_feedback_recorded", rejected, maintainer)
+    assert retry["event_id"] == first["event_id"]
+    assert len(w._events()) == count
+
+    state = w.state("2030-01-01T00:00:07Z")
+    assert state["problem_status"] == "OPEN_AFTER_FEEDBACK"
+    assert state["research_resume"]["action"] == "CONTINUE_RESEARCH_FROM_FEEDBACK"
+    assert state["research_resume"]["feedback"]["decision"] == "REJECTED"
+    claim(w, session, "2030-01-01T00:00:08Z", "c-revision")
+    assert w.state("2030-01-01T00:00:08Z")["claims"][-1]["status"] == "active"
+
+    set_time(w, "2030-01-01T00:00:09Z")
+    with pytest.raises(ProtocolError, match="candidate state"):
+        w.append_maintainer(
+            "candidate_feedback_recorded", feedback_payload("verifier", "VERIFIED"), maintainer
+        )
+
+
+def test_task_artifact_external_id_and_feedback_binding_fail_closed(tmp_path):
+    w, maintainer, _, session, _, _ = kit(tmp_path)
+    claim(w, session)
+    advance(w, session)
+    set_time(w, "2030-01-01T00:00:03Z")
+    with pytest.raises(ProtocolError, match="task identity"):
+        w.append(
+            "submission_candidate_published",
+            {**candidate_payload(), "formal_repository_pin": "9" * 40},
+            session,
+        )
+    with pytest.raises(ProtocolError, match="evidence in a linked handoff"):
+        w.append(
+            "submission_candidate_published",
+            {
+                **candidate_payload(),
+                "artifact": {"ref": "Other.lean", "sha256": "sha256:" + "f" * 64},
+            },
+            session,
+        )
+    w.append("submission_candidate_published", candidate_payload(), session)
+    set_time(w, "2030-01-01T00:00:05Z")
+    with pytest.raises(ProtocolError, match="sealed candidate"):
+        w.append_maintainer(
+            "external_submission_receipted",
+            {**submission_payload(), "artifact_sha256": "sha256:" + "f" * 64},
+            maintainer,
+        )
+    with pytest.raises(ProtocolError, match="result URL"):
+        w.append_maintainer(
+            "external_submission_receipted",
+            {**submission_payload(), "public_result_url": "https://example.com/fake"},
+            maintainer,
+        )
+    with pytest.raises(ProtocolError, match="source"):
+        w.append_maintainer(
+            "external_submission_receipted",
+            {**submission_payload(), "source": "participant-self-report"},
+            maintainer,
+        )
+    w.append_maintainer("external_submission_receipted", submission_payload(), maintainer)
+    set_time(w, "2030-01-01T00:00:06Z")
+    with pytest.raises(ProtocolError, match="result URL"):
+        w.append_maintainer(
+            "candidate_feedback_recorded",
+            {
+                **feedback_payload("verifier", "REJECTED"),
+                "public_result_url": "https://conjectures.io/results/00000000-0000-0000-0000-000000000000",
+            },
+            maintainer,
+        )
+
+
+def test_partial_award_records_feedback_and_keeps_research_open(tmp_path):
+    w, maintainer, _, session, _, _ = kit(tmp_path)
+    claim(w, session)
+    advance(w, session)
+    set_time(w, "2030-01-01T00:00:03Z")
+    w.append("submission_candidate_published", candidate_payload(), session)
+    set_time(w, "2030-01-01T00:00:05Z")
+    w.append_maintainer("external_submission_receipted", submission_payload(), maintainer)
+    set_time(w, "2030-01-01T00:00:06Z")
+    w.append_maintainer(
+        "candidate_feedback_recorded", feedback_payload("verifier", "VERIFIED"), maintainer
+    )
+    set_time(w, "2030-01-01T00:00:07Z")
+    partial = feedback_payload("review", "PARTIAL_AWARD")
+    partial["reason_code"] = "FORMALIZATION_DEFECT_AWARD"
+    partial["next_action"] = "import a corrected task manifest before more research"
+    w.append_maintainer("candidate_feedback_recorded", partial, maintainer)
+    state = w.state("2030-01-01T00:00:07Z")
+    assert state["problem_status"] == "OPEN_AFTER_FEEDBACK"
+    assert state["research_resume"]["action"] == "CONTINUE_RESEARCH_FROM_FEEDBACK"
+    assert state["research_resume"]["feedback"]["decision"] == "PARTIAL_AWARD"
+    claim(w, session, "2030-01-01T00:00:08Z", "c-after-partial")
+    set_time(w, "2030-01-01T00:00:08Z")
+    with pytest.raises(ProtocolError, match="invalid reward decision"):
+        w.append_maintainer(
+            "candidate_feedback_recorded", feedback_payload("reward", "PAID"), maintainer
+        )
+    w.append_maintainer(
+        "candidate_feedback_recorded", feedback_payload("reward", "ELIGIBLE"), maintainer
+    )
+    assert w.state("2030-01-01T00:00:08Z")["problem_status"] == "OPEN_AFTER_FEEDBACK"

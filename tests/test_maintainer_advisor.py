@@ -13,9 +13,18 @@ def _tick():
     return {
         "status": {
             "problem_id": "p-1",
+            "problem_status": "REVIEW_PENDING",
             "at": "2030-01-01T00:00:00Z",
             "claims": [{"claim_id": "c-1", "status": "active", "deadline": "2030-01-01T00:01:00Z"}],
             "handoffs_queued": ["event-1"],
+            "candidates": [
+                {
+                    "candidate_id": "candidate-1",
+                    "status": "REVIEW_PENDING",
+                    "submission": {"submission_id": "submission-1", "private": "redacted"},
+                    "summary": "must not reach advisor",
+                }
+            ],
             "warnings": [{"kind": "overlap", "claims": ["c-1"]}],
             "limitations": "Projection only",
         },
@@ -121,5 +130,21 @@ def test_cached_advisory_tampering_fails_closed(tmp_path):
 
 def test_brief_redacts_unknown_tick_fields():
     brief = brief_from_tick(_tick())
-    assert set(brief) == {"domain", "problem_id", "at", "claims", "handoffs_queued", "warnings"}
+    assert set(brief) == {
+        "domain",
+        "problem_id",
+        "problem_status",
+        "at",
+        "claims",
+        "handoffs_queued",
+        "candidates",
+        "warnings",
+    }
     assert "limitations" not in brief
+    assert brief["candidates"] == [
+        {
+            "candidate_id": "candidate-1",
+            "status": "REVIEW_PENDING",
+            "submission_id": "submission-1",
+        }
+    ]

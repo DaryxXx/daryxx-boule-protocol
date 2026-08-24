@@ -32,23 +32,34 @@ def brief_from_tick(tick: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(tick, dict) or not isinstance(tick.get("status"), dict):
         raise ProtocolError("maintainer tick has no status")
     status = tick["status"]
-    required = {"problem_id", "at", "claims", "handoffs_queued", "warnings"}
+    required = {
+        "problem_id",
+        "problem_status",
+        "at",
+        "claims",
+        "handoffs_queued",
+        "candidates",
+        "warnings",
+    }
     if not required <= set(status):
         raise ProtocolError("maintainer tick is missing operational fields")
     claims = status["claims"]
     handoffs = status["handoffs_queued"]
+    candidates = status["candidates"]
     warnings = status["warnings"]
     if (
         not all(isinstance(item, dict) for item in claims)
         or not all(isinstance(item, str) for item in handoffs)
+        or not all(isinstance(item, dict) for item in candidates)
         or not all(isinstance(item, dict) for item in warnings)
     ):
         raise ProtocolError("maintainer tick has invalid operational fields")
     # Do not pass participant prose, event payloads, signatures, or arbitrary
     # future fields to the model.
     return {
-        "domain": "boule-maintainer-advisor-v0.3",
+        "domain": "boule-maintainer-advisor-v0.4",
         "problem_id": status["problem_id"],
+        "problem_status": status["problem_status"],
         "at": status["at"],
         "claims": [
             {
@@ -59,6 +70,18 @@ def brief_from_tick(tick: dict[str, Any]) -> dict[str, Any]:
             for claim in claims
         ],
         "handoffs_queued": list(handoffs),
+        "candidates": [
+            {
+                "candidate_id": candidate.get("candidate_id"),
+                "status": candidate.get("status"),
+                "submission_id": (
+                    candidate["submission"].get("submission_id")
+                    if isinstance(candidate.get("submission"), dict)
+                    else None
+                ),
+            }
+            for candidate in candidates
+        ],
         "warnings": [
             {key: warning[key] for key in ("kind", "claims") if key in warning}
             for warning in warnings
@@ -70,6 +93,18 @@ def state_digest(tick: dict[str, Any]) -> str:
     """Digest the operational state, deliberately excluding tick observation time."""
     brief = brief_from_tick(tick)
     return digest_object({key: value for key, value in brief.items() if key != "at"})
+
+
+def _references(brief: dict[str, Any]) -> set[str]:
+    return (
+        {claim["claim_id"] for claim in brief["claims"] if isinstance(claim.get("claim_id"), str)}
+        | set(brief["handoffs_queued"])
+        | {
+            candidate["candidate_id"]
+            for candidate in brief["candidates"]
+            if isinstance(candidate.get("candidate_id"), str)
+        }
+    )
 
 
 def _prompt(brief: dict[str, Any], digest: str) -> str:
@@ -137,8 +172,10 @@ def _validate_cached(
     stored_brief = value["brief"]
     if not isinstance(stored_brief, dict):
         raise ProtocolError("stored maintainer advisory brief is invalid")
+
     def without_time(item: dict[str, Any]) -> dict[str, Any]:
         return {key: content for key, content in item.items() if key != "at"}
+
     if without_time(stored_brief) != without_time(brief):
         raise ProtocolError("stored maintainer advisory does not match current state")
     if digest_object(without_time(stored_brief)) != digest:
@@ -210,15 +247,9 @@ def advise(
                 cached = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise ProtocolError("stored maintainer advisory is invalid") from exc
-            refs = {
-                claim["claim_id"]
-                for claim in brief["claims"]
-                if isinstance(claim.get("claim_id"), str)
-            } | set(brief["handoffs_queued"])
+            refs = _references(brief)
             return _validate_cached(cached, digest, brief, refs)
-        refs = {
-            claim["claim_id"] for claim in brief["claims"] if isinstance(claim.get("claim_id"), str)
-        } | set(brief["handoffs_queued"])
+        refs = _references(brief)
         fd, schema_name = tempfile.mkstemp(prefix=".maintainer-advisor-schema-", suffix=".json")
         schema_path = Path(schema_name)
         try:

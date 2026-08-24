@@ -186,16 +186,13 @@ def _write_case_support_files(problem_dir: Path) -> None:
     ignore = problem_dir / ".boule" / ".gitignore"
     if not ignore.exists():
         ignore.write_text(
-            "private/\nlock\nprojection.json\nmaintainer-receipt.json\n"
-            "advisories/\nwatcher.json\n",
+            "private/\nlock\nprojection.json\nmaintainer-receipt.json\nadvisories/\nwatcher.json\n",
             encoding="utf-8",
         )
     guide = problem_dir / "BOULE.md"
     if not guide.exists():
         problem = json.loads((problem_dir / "problem.json").read_text(encoding="utf-8"))
-        policy = json.loads(
-            (problem_dir / ".boule" / "policy.json").read_text(encoding="utf-8")
-        )
+        policy = json.loads((problem_dir / ".boule" / "policy.json").read_text(encoding="utf-8"))
         guide.write_text(
             "# Continue this Boule problem\n\n"
             f"Problem: {problem['problem']['title']}\n\n"
@@ -205,7 +202,9 @@ def _write_case_support_files(problem_dir: Path) -> None:
             "Signed summaries and chat are public metadata; keep undisclosed methods behind "
             "digests or authorized evidence references. Chat coordinates work but is not "
             "contribution evidence. "
-            "Do not submit a result, spend funds, or expose private prompts or secrets.\n",
+            "A completed artifact may be sealed locally with `boule submit`; that command does "
+            "not contact Conjectures.io, authorize a fee, or establish acceptance. Do not perform "
+            "an external submission, spend funds, or expose private prompts or secrets.\n",
             encoding="utf-8",
         )
     agent_rules = (
@@ -216,8 +215,10 @@ def _write_case_support_files(problem_dir: Path) -> None:
         "claim alive with a heartbeat, publish a signed checkpoint after reusable progress, "
         "and publish ADVANCE, NEGATIVE, BLOCKED, or NO_SIGNAL before stopping. Declare every "
         "handoff dependency and citation. Chat coordinates work but is not prize evidence. "
-        "Never submit, spend funds, expose secrets/private traces, claim another session's "
-        "work, or treat maintainer advice as mathematical review.\n"
+        "If an exact solution artifact is evidence in an ADVANCE handoff, `boule submit` may "
+        "seal a local candidate. It never submits externally or authorizes payment. Never perform "
+        "an external submission, spend funds, expose secrets/private traces, claim another "
+        "session's work, or treat maintainer advice as mathematical review.\n"
     )
     for name in ("AGENTS.md", "CLAUDE.md"):
         path = problem_dir / name
@@ -287,6 +288,15 @@ def _identity_payload(workspace: Workspace, profile: dict[str, Any]) -> dict[str
         "problem_id": workspace.problem["problem_id"],
         "participant_id": profile["participant_id"],
         "session_id": profile["session_id"],
+    }
+
+
+def _task_payload(workspace: Workspace) -> dict[str, str]:
+    task = workspace.problem["task"]
+    return {
+        "task_id": task["task_id"],
+        "task_commitment": task["task_commitment"],
+        "formal_repository_pin": task["formal_repository_pin"],
     }
 
 
@@ -469,6 +479,39 @@ def _agent_handoff(args: argparse.Namespace) -> int:
     return 0
 
 
+def _submit_candidate(args: argparse.Namespace) -> int:
+    workspace, profile, key = _session(args)
+    candidate_id = args.candidate_id or f"candidate-{secrets.token_hex(8)}"
+    artifact = _evidence(workspace.root, [args.artifact], [])[0]
+    event = workspace.append(
+        "submission_candidate_published",
+        {
+            **_identity_payload(workspace, profile),
+            "candidate_id": candidate_id,
+            "handoff_ids": args.handoff,
+            **_task_payload(workspace),
+            "artifact": artifact,
+            "summary": args.summary,
+            "reproduce": args.reproduce,
+            "limitations": args.limitations,
+        },
+        key,
+    )
+    _print(
+        {
+            **_public_event(event),
+            "candidate_id": candidate_id,
+            "candidate_status": "CANDIDATE_READY",
+            "external_submission_id": None,
+            "local_candidate_only": True,
+            "payment_authorized": False,
+            "next": "A maintainer may separately record an already completed external submission.",
+        },
+        args.json,
+    )
+    return 0
+
+
 def _status(args: argparse.Namespace) -> int:
     _print(_workspace(args).state(args.at or _now()), args.json)
     return 0
@@ -516,6 +559,9 @@ def _history(args: argparse.Namespace) -> int:
             "claims": state["claims"],
             "checkpoints": state["checkpoints"],
             "handoffs": state["handoffs"],
+            "candidates": state["candidates"],
+            "feedback": state["feedback"],
+            "resolutions": state["resolutions"],
         },
         args.json,
     )
@@ -535,6 +581,7 @@ def _brief(args: argparse.Namespace) -> int:
         f"- Conjectures task: `{task['task_id']}` ({task['mode']})",
         f"- Task commitment: `{task['task_commitment']}`",
         f"- Source pin: `{task['formal_repository_pin']}`",
+        f"- Problem status: `{state['problem_status']}`",
         f"- Active/stale claims: {len(active)}",
         f"- Queued handoffs: {len(state['handoffs'])}",
         "",
@@ -549,6 +596,22 @@ def _brief(args: argparse.Namespace) -> int:
             )
     else:
         lines.append("- No active claims.")
+    resume = state["research_resume"]
+    lines.extend(["", "## Submission/review state", "", f"- Next action: `{resume['action']}`"])
+    if resume.get("candidate_id"):
+        lines.append(f"- Candidate: `{resume['candidate_id']}`")
+    if resume.get("submission_id"):
+        lines.append(f"- External submission: `{resume['submission_id']}`")
+    if resume.get("feedback"):
+        feedback = resume["feedback"]
+        lines.extend(
+            [
+                f"- Trusted-clerk observation: `{feedback['stage']} / {feedback['decision']}`",
+                f"- Reason code: `{feedback['reason_code']}`",
+                f"- Feedback: {feedback['summary']}",
+                f"- Requested next action: {feedback['next_action']}",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -558,7 +621,8 @@ def _brief(args: argparse.Namespace) -> int:
             "does not duplicate an active claim, or declare `--parallel` deliberately. Record "
             "a heartbeat/checkpoint while working and a signed ADVANCE, NEGATIVE, BLOCKED, or "
             "NO_SIGNAL handoff before stopping. Declare dependencies and citations. Chat is "
-            "coordination only. Do not submit, spend funds, expose secrets, or claim another "
+            "coordination only. A local `boule submit` candidate is not an external submission. "
+            "Do not spend funds, perform an external submission, expose secrets, or claim another "
             "session's work.",
         ]
     )
@@ -572,6 +636,153 @@ def _maintainer_tick(args: argparse.Namespace) -> int:
     workspace = _workspace(args)
     tick = workspace.maintainer_tick(args.at or _now(), load_maintainer_key(workspace))
     _print(tick, args.json)
+    return 0
+
+
+def _reference(raw: str, name: str) -> dict[str, str]:
+    try:
+        reference, digest = raw.rsplit("=", 1)
+    except ValueError as exc:
+        raise ProtocolError(f"{name} must be REF=sha256:HEX") from exc
+    if not reference:
+        raise ProtocolError(f"{name} must include a reference")
+    return {"ref": reference, "sha256": digest}
+
+
+def _canonical_result_reference(raw: str, result_url: str, name: str) -> dict[str, str]:
+    if raw.startswith("sha256:"):
+        return {"ref": result_url, "sha256": raw}
+    return _reference(raw, name)
+
+
+def _candidate(workspace: Workspace, candidate_id: str) -> dict[str, Any]:
+    state = workspace.state(_now())
+    candidate = next(
+        (item for item in state["candidates"] if item["candidate_id"] == candidate_id), None
+    )
+    if candidate is None:
+        raise ProtocolError("candidate does not exist")
+    return candidate
+
+
+def _maintainer_record_submission(args: argparse.Namespace) -> int:
+    workspace = _workspace(args)
+    candidate = _candidate(workspace, args.candidate)
+    result_url = args.public_result_url or (f"https://conjectures.io/results/{args.submission_id}")
+    event = workspace.append_maintainer(
+        "external_submission_receipted",
+        {
+            "problem_id": workspace.problem["problem_id"],
+            "candidate_id": args.candidate,
+            "submission_id": args.submission_id,
+            **_task_payload(workspace),
+            "artifact_sha256": candidate["artifact"]["sha256"],
+            "submitted_at": args.submitted_at or _now(),
+            "public_result_url": result_url,
+            "source": "trusted-clerk/conjectures.io-submission",
+            "receipt": _canonical_result_reference(args.receipt, result_url, "--receipt"),
+        },
+        load_maintainer_key(workspace),
+    )
+    _print(
+        {
+            **_public_event(event),
+            "candidate_id": args.candidate,
+            "submission_id": args.submission_id,
+            "candidate_status": "VERIFICATION_PENDING",
+            "external_observation_only": True,
+            "payment_performed": False,
+        },
+        args.json,
+    )
+    return 0
+
+
+def _maintainer_feedback(args: argparse.Namespace) -> int:
+    workspace = _workspace(args)
+    candidate = _candidate(workspace, args.candidate)
+    submission = candidate.get("submission")
+    if not submission:
+        raise ProtocolError("candidate has no recorded external submission")
+    submission_id = submission["submission_id"]
+    result_url = args.public_result_url or f"https://conjectures.io/results/{submission_id}"
+    event = workspace.append_maintainer(
+        "candidate_feedback_recorded",
+        {
+            "problem_id": workspace.problem["problem_id"],
+            "candidate_id": args.candidate,
+            "submission_id": submission_id,
+            **_task_payload(workspace),
+            "artifact_sha256": candidate["artifact"]["sha256"],
+            "stage": args.stage,
+            "decision": args.decision,
+            "reason_code": args.reason_code,
+            "summary": args.summary,
+            "next_action": args.next_action,
+            "public_result_url": result_url,
+            "source": {
+                "verifier": "trusted-clerk/conjectures.io-lean-verifier",
+                "review": "trusted-clerk/conjectures.io-human-review",
+                "reward": "trusted-clerk/conjectures.io-reward-eligibility",
+            }[args.stage],
+            "report": _canonical_result_reference(args.report, result_url, "--report"),
+        },
+        load_maintainer_key(workspace),
+    )
+    state = workspace.state(_now())
+    _print(
+        {
+            **_public_event(event),
+            "candidate_id": args.candidate,
+            "submission_id": submission_id,
+            "stage": args.stage,
+            "decision": args.decision,
+            "problem_status": state["problem_status"],
+            "research_resume": state["research_resume"],
+            "external_observation_only": True,
+            "payment_performed": False,
+        },
+        args.json,
+    )
+    return 0
+
+
+def _maintainer_finalize(args: argparse.Namespace) -> int:
+    workspace = _workspace(args)
+    candidate = _candidate(workspace, args.candidate)
+    submission = candidate.get("submission")
+    review = candidate.get("review")
+    if not submission or not review:
+        raise ProtocolError("candidate has no completed external review to finalize")
+    event = workspace.append_maintainer(
+        "case_resolution_recorded",
+        {
+            "problem_id": workspace.problem["problem_id"],
+            "candidate_id": args.candidate,
+            "submission_id": submission["submission_id"],
+            **_task_payload(workspace),
+            "artifact_sha256": candidate["artifact"]["sha256"],
+            "public_result_url": submission["public_result_url"],
+            "source": "trusted-clerk/conjectures.io-human-review",
+            "resolution": "SOLVED",
+            "review_event_id": review["event_id"],
+            "note": args.note,
+        },
+        load_maintainer_key(workspace),
+    )
+    state = workspace.state(_now())
+    _print(
+        {
+            **_public_event(event),
+            "candidate_id": args.candidate,
+            "submission_id": submission["submission_id"],
+            "problem_status": state["problem_status"],
+            "trusted_clerk_finalization": True,
+            "authenticated_external_attestation": False,
+            "payment_performed": False,
+        },
+        args.json,
+    )
     return 0
 
 
@@ -746,6 +957,28 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--at", help="ISO-8601 UTC observation time")
     brief.set_defaults(handler=_brief)
 
+    submit = subparsers.add_parser(
+        "submit",
+        help="seal a local solution candidate without contacting Conjectures.io",
+    )
+    submit.add_argument("problem", help="initialized problem directory")
+    submit.add_argument("--session", help="session id; defaults to BOULE_SESSION")
+    submit.add_argument("--candidate-id", help="optional stable candidate id")
+    submit.add_argument(
+        "--handoff",
+        action="append",
+        required=True,
+        help="earlier ADVANCE handoff causally used by this candidate",
+    )
+    submit.add_argument(
+        "--artifact", required=True, help="exact solution file inside the problem directory"
+    )
+    submit.add_argument("--summary", required=True, help="what the candidate claims to solve")
+    submit.add_argument("--reproduce", required=True, help="exact local verification command")
+    submit.add_argument("--limitations", default="No additional limitations declared.")
+    submit.add_argument("--json", action="store_true", help="emit compact JSON")
+    submit.set_defaults(handler=_submit_candidate)
+
     agent = subparsers.add_parser("agent", help="append signed participant activity")
     agent_commands = agent.add_subparsers(dest="agent_command", required=True)
 
@@ -841,6 +1074,70 @@ def build_parser() -> argparse.ArgumentParser:
     tick.add_argument("--at", help="ISO-8601 UTC receipt time")
     tick.add_argument("--json", action="store_true", help="emit compact JSON")
     tick.set_defaults(handler=_maintainer_tick)
+
+    record_submission = maintainer_commands.add_parser(
+        "record-submission",
+        help="record an already completed external submission from its receipt",
+    )
+    record_submission.add_argument("problem", help="initialized problem directory")
+    record_submission.add_argument("--candidate", required=True, help="local candidate id")
+    record_submission.add_argument(
+        "--submission-id", required=True, help="canonical Conjectures result UUID"
+    )
+    record_submission.add_argument(
+        "--receipt",
+        required=True,
+        metavar="sha256:HEX",
+        help="digest of the canonical Conjectures result page (URL=sha256:HEX also accepted)",
+    )
+    record_submission.add_argument(
+        "--submitted-at", help="official ISO-8601 UTC submission time; defaults to now"
+    )
+    record_submission.add_argument(
+        "--public-result-url", help="canonical Conjectures result URL; derived by default"
+    )
+    record_submission.add_argument("--json", action="store_true", help="emit compact JSON")
+    record_submission.set_defaults(handler=_maintainer_record_submission)
+
+    feedback = maintainer_commands.add_parser(
+        "feedback", help="record evidence-backed verifier, review, or reward feedback"
+    )
+    feedback.add_argument("problem", help="initialized problem directory")
+    feedback.add_argument("--candidate", required=True, help="local candidate id")
+    feedback.add_argument("--stage", required=True, choices=["verifier", "review", "reward"])
+    feedback.add_argument(
+        "--decision",
+        required=True,
+        help=("VERIFIED/REJECTED, APPROVED/REJECTED/PARTIAL_AWARD, or ELIGIBLE/INELIGIBLE"),
+    )
+    feedback.add_argument("--reason-code", required=True, help="official reason code or label")
+    feedback.add_argument("--summary", required=True, help="concise official feedback summary")
+    feedback.add_argument(
+        "--next", "--next-action", dest="next_action", required=True, help="next safe action"
+    )
+    feedback.add_argument(
+        "--report",
+        required=True,
+        metavar="sha256:HEX",
+        help="digest of the canonical Conjectures result page (URL=sha256:HEX also accepted)",
+    )
+    feedback.add_argument(
+        "--public-result-url", help="canonical Conjectures result URL; derived by default"
+    )
+    feedback.add_argument("--json", action="store_true", help="emit compact JSON")
+    feedback.set_defaults(handler=_maintainer_feedback)
+
+    finalize = maintainer_commands.add_parser(
+        "finalize", help="close the local case after an APPROVED review observation"
+    )
+    finalize.add_argument("problem", help="initialized problem directory")
+    finalize.add_argument("--candidate", required=True, help="approved local candidate id")
+    finalize.add_argument(
+        "--note",
+        default="Trusted clerk finalized the case from the recorded approved review.",
+    )
+    finalize.add_argument("--json", action="store_true", help="emit compact JSON")
+    finalize.set_defaults(handler=_maintainer_finalize)
 
     def advisor_arguments(command: argparse.ArgumentParser) -> None:
         command.add_argument("--model", choices=sorted(ALLOWED_MODELS), default="gpt-5.6-sol")

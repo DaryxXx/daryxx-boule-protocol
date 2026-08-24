@@ -1,4 +1,4 @@
-"""Local v0.3 operational ledger for an imported Boule problem manifest."""
+"""Local v0.4 operational ledger for an imported Boule problem manifest."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import tempfile
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -25,7 +26,26 @@ PARTICIPANT_EVENTS = {
     "message_posted",
     "claim_released",
     "handoff_published",
+    "submission_candidate_published",
 }
+
+MAINTAINER_EVENTS = {
+    "external_submission_receipted",
+    "candidate_feedback_recorded",
+    "case_resolution_recorded",
+}
+
+WORKSPACE_EVENTS = PARTICIPANT_EVENTS | MAINTAINER_EVENTS
+IDEMPOTENT_EVENTS = {
+    "submission_candidate_published",
+    "external_submission_receipted",
+    "candidate_feedback_recorded",
+    "case_resolution_recorded",
+}
+
+VERIFIER_DECISIONS = frozenset({"VERIFIED", "REJECTED"})
+REVIEW_DECISIONS = frozenset({"APPROVED", "REJECTED", "PARTIAL_AWARD"})
+REWARD_DECISIONS = frozenset({"ELIGIBLE", "INELIGIBLE"})
 
 
 def _time(value: str) -> datetime:
@@ -55,6 +75,18 @@ def _sha256(value: Any, name: str) -> str:
         or any(char not in "0123456789abcdef" for char in value[7:])
     ):
         raise ProtocolError(f"{name} must be a lowercase sha256 digest")
+    return value
+
+
+def _uuid(value: Any, name: str) -> str:
+    if not isinstance(value, str):
+        raise ProtocolError(f"{name} must be a canonical UUID")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError) as exc:
+        raise ProtocolError(f"{name} must be a canonical UUID") from exc
+    if str(parsed) != value:
+        raise ProtocolError(f"{name} must be a canonical UUID")
     return value
 
 
@@ -274,7 +306,7 @@ class Workspace:
                 or e["prev_event_hash"] != previous
             ):
                 raise ProtocolError("event chain fields are invalid")
-            if not isinstance(e["kind"], str) or e["kind"] not in PARTICIPANT_EVENTS:
+            if not isinstance(e["kind"], str) or e["kind"] not in WORKSPACE_EVENTS:
                 raise ProtocolError("unsupported workspace event")
             _time(e["received_at"])
             _text(e["event_id"], "event_id", 128)
@@ -296,7 +328,12 @@ class Workspace:
         for event in events:
             instant = _time(event["received_at"])
             state = self._state_from(validated, instant)
-            self._authorize(event["kind"], event["payload"], event["actor"], state, instant)
+            if event["kind"] in PARTICIPANT_EVENTS:
+                self._authorize(event["kind"], event["payload"], event["actor"], state, instant)
+            else:
+                self._authorize_maintainer(
+                    event["kind"], event["payload"], event["actor"], state, instant
+                )
             validated.append(event)
         self._guard_receipts(events)
         return events
@@ -304,6 +341,23 @@ class Workspace:
     def append(self, kind: str, payload: dict[str, Any], private_key: Any) -> dict[str, Any]:
         if kind not in PARTICIPANT_EVENTS:
             raise ProtocolError("only participant events may be appended")
+        return self._append(kind, payload, private_key, maintainer=False)
+
+    def append_maintainer(
+        self, kind: str, payload: dict[str, Any], private_key: Any
+    ) -> dict[str, Any]:
+        if kind not in MAINTAINER_EVENTS:
+            raise ProtocolError("only submission observation events may be appended by maintainer")
+        return self._append(kind, payload, private_key, maintainer=True)
+
+    def _append(
+        self,
+        kind: str,
+        payload: dict[str, Any],
+        private_key: Any,
+        *,
+        maintainer: bool,
+    ) -> dict[str, Any]:
         observed = self._clock()
         if not isinstance(observed, datetime) or observed.tzinfo is None:
             raise ProtocolError("workspace clock must return a timezone-aware datetime")
@@ -313,9 +367,25 @@ class Workspace:
             events = self._events()
             if events and now < _time(events[-1]["received_at"]):
                 raise ProtocolError("event receipt times must be monotonic")
-            state = self._state_from(events, now)
             actor = public_key_text(private_key)
-            self._authorize(kind, payload, actor, state, now)
+            if kind in IDEMPOTENT_EVENTS:
+                previous = next(
+                    (
+                        event
+                        for event in reversed(events)
+                        if event["kind"] == kind
+                        and event["actor"] == actor
+                        and event["payload"] == payload
+                    ),
+                    None,
+                )
+                if previous is not None:
+                    return previous
+            state = self._state_from(events, now)
+            if maintainer:
+                self._authorize_maintainer(kind, payload, actor, state, now)
+            else:
+                self._authorize(kind, payload, actor, state, now)
             u = {
                 "seq": len(events),
                 "event_id": f"{len(events):08d}-{digest_object([kind, payload, received_at])[:16]}",
@@ -374,6 +444,59 @@ class Workspace:
             or p.get("participant_id") != session["participant_id"]
         ):
             raise ProtocolError("participant/session identity mismatch")
+        if kind == "submission_candidate_published":
+            req = {
+                "problem_id",
+                "participant_id",
+                "session_id",
+                "candidate_id",
+                "handoff_ids",
+                "task_id",
+                "task_commitment",
+                "formal_repository_pin",
+                "artifact",
+                "summary",
+                "reproduce",
+                "limitations",
+            }
+            if set(p) != req:
+                raise ProtocolError("invalid submission_candidate_published payload")
+            if self._problem_status(s) == "SOLVED":
+                raise ProtocolError("problem state does not accept another solution candidate")
+            _text(p["candidate_id"], "candidate_id", 128)
+            if p["candidate_id"] in s["candidates"]:
+                raise ProtocolError("candidate id is not unique")
+            self._task_binding(p)
+            self._artifact(p["artifact"], "candidate artifact")
+            if any(
+                candidate["artifact"]["sha256"] == p["artifact"]["sha256"]
+                for candidate in s["candidates"].values()
+            ):
+                raise ProtocolError("candidate artifact is already sealed")
+            for key in ("summary", "reproduce", "limitations"):
+                _text(p[key], f"candidate.{key}", 2000)
+            handoff_ids = p["handoff_ids"]
+            if (
+                not isinstance(handoff_ids, list)
+                or not handoff_ids
+                or len(handoff_ids) > 32
+                or any(not isinstance(item, str) for item in handoff_ids)
+                or len(handoff_ids) != len(set(handoff_ids))
+            ):
+                raise ProtocolError("candidate handoff_ids must be 1 to 32 unique ids")
+            linked = []
+            for handoff_id in handoff_ids:
+                handoff = s["handoffs_by_id"].get(handoff_id)
+                if handoff is None or handoff["outcome"] != "ADVANCE":
+                    raise ProtocolError("candidate dependencies must be earlier ADVANCE handoffs")
+                linked.append(handoff)
+            evidence = {
+                (item["ref"], item["sha256"]) for handoff in linked for item in handoff["evidence"]
+            }
+            artifact = (p["artifact"]["ref"], p["artifact"]["sha256"])
+            if artifact not in evidence:
+                raise ProtocolError("candidate artifact must be evidence in a linked handoff")
+            return
         if kind == "message_posted":
             req = {"problem_id", "participant_id", "session_id", "claim_id", "topic", "body"}
             if set(p) != req or (p["claim_id"] is not None and not isinstance(p["claim_id"], str)):
@@ -396,6 +519,8 @@ class Workspace:
             }
             if set(p) != req:
                 raise ProtocolError("invalid work_claimed payload")
+            if self._problem_status(s) == "SOLVED":
+                raise ProtocolError("problem is not open for new work claims")
             for k in ("claim_id", "route", "success_gate", "falsifier"):
                 _text(p[k], k, 1000)
             if session["active_claim"] is not None:
@@ -497,16 +622,167 @@ class Workspace:
                 raise ProtocolError("handoff dependency must refer to an earlier handoff")
             if p["outcome"] in {"ADVANCE", "NEGATIVE"} and not p["evidence"]:
                 raise ProtocolError("ADVANCE and NEGATIVE handoffs require evidence")
-            if (
-                p["outcome"] == "BLOCKED"
-                and not p["evidence"]
-                and not p["depends_on"]
-            ):
+            if p["outcome"] == "BLOCKED" and not p["evidence"] and not p["depends_on"]:
                 raise ProtocolError("BLOCKED handoff needs evidence or an earlier dependency")
             if p["provenance"] == "original" and not p["evidence"]:
                 raise ProtocolError("original provenance requires evidence")
         else:
             raise ProtocolError("unsupported participant event")
+
+    def _authorize_maintainer(
+        self, kind: str, p: dict[str, Any], actor: str, s: dict[str, Any], now: datetime
+    ) -> None:
+        if actor != self.config["maintainer_key"]:
+            raise ProtocolError("submission observations require the maintainer key")
+        if not isinstance(p, dict) or p.get("problem_id") != self.problem["problem_id"]:
+            raise ProtocolError("event belongs to another problem")
+        common = {
+            "problem_id",
+            "candidate_id",
+            "submission_id",
+            "task_id",
+            "task_commitment",
+            "formal_repository_pin",
+            "artifact_sha256",
+            "public_result_url",
+            "source",
+        }
+        if kind == "external_submission_receipted":
+            req = common | {"submitted_at", "receipt"}
+            if set(p) != req:
+                raise ProtocolError("invalid external_submission_receipted payload")
+            candidate = self._bound_candidate(p, s)
+            if candidate["submission"] is not None:
+                raise ProtocolError("candidate already has an external submission")
+            if candidate["status"] != "CANDIDATE_READY":
+                raise ProtocolError("candidate is not ready for external submission receipt")
+            if self._problem_status(s) in {
+                "VERIFICATION_PENDING",
+                "REVIEW_PENDING",
+                "ACCEPTANCE_RECORDED",
+                "SOLVED",
+            }:
+                raise ProtocolError("another submission state currently blocks external receipt")
+            submission_id = _uuid(p["submission_id"], "submission_id")
+            if submission_id in s["submission_ids"]:
+                raise ProtocolError("external submission id is already bound")
+            self._result_url(p["public_result_url"], submission_id)
+            self._artifact(p["receipt"], "submission receipt")
+            self._external_source(
+                p["source"],
+                "trusted-clerk/conjectures.io-submission",
+                p["receipt"],
+                p["public_result_url"],
+            )
+            if _time(p["submitted_at"]) > now:
+                raise ProtocolError("external submission time cannot be in the future")
+            return
+        if kind == "candidate_feedback_recorded":
+            req = common | {
+                "stage",
+                "decision",
+                "reason_code",
+                "summary",
+                "next_action",
+                "report",
+            }
+            if set(p) != req:
+                raise ProtocolError("invalid candidate_feedback_recorded payload")
+            candidate = self._bound_candidate(p, s)
+            submission = candidate["submission"]
+            if submission is None or submission["submission_id"] != p["submission_id"]:
+                raise ProtocolError("feedback is not bound to the candidate submission")
+            self._result_url(p["public_result_url"], p["submission_id"])
+            self._artifact(p["report"], "feedback report")
+            expected_source = {
+                "verifier": "trusted-clerk/conjectures.io-lean-verifier",
+                "review": "trusted-clerk/conjectures.io-human-review",
+                "reward": "trusted-clerk/conjectures.io-reward-eligibility",
+            }.get(p["stage"])
+            self._external_source(p["source"], expected_source, p["report"], p["public_result_url"])
+            for key in ("reason_code", "summary", "next_action"):
+                _text(p[key], f"feedback.{key}", 2000)
+            stage, decision = p["stage"], p["decision"]
+            if stage == "verifier":
+                if decision not in VERIFIER_DECISIONS:
+                    raise ProtocolError("invalid verifier decision")
+                if candidate["status"] != "VERIFICATION_PENDING":
+                    raise ProtocolError("verifier feedback is not valid in the candidate state")
+            elif stage == "review":
+                if decision not in REVIEW_DECISIONS:
+                    raise ProtocolError("invalid review decision")
+                if candidate["status"] != "REVIEW_PENDING":
+                    raise ProtocolError("review feedback requires a Lean-verified candidate")
+            elif stage == "reward":
+                if decision not in REWARD_DECISIONS:
+                    raise ProtocolError("invalid reward decision")
+                if candidate["status"] not in {"APPROVED", "REJECTED", "PARTIAL_AWARD"}:
+                    raise ProtocolError("reward feedback requires a completed human review")
+                if candidate["reward"] is not None:
+                    raise ProtocolError("reward decision is already terminal")
+            else:
+                raise ProtocolError("feedback stage must be verifier, review, or reward")
+            return
+        if kind == "case_resolution_recorded":
+            req = common | {"resolution", "review_event_id", "note"}
+            if set(p) != req:
+                raise ProtocolError("invalid case_resolution_recorded payload")
+            candidate = self._bound_candidate(p, s)
+            submission = candidate["submission"]
+            review = candidate["review"]
+            if submission is None or submission["submission_id"] != p["submission_id"]:
+                raise ProtocolError("resolution is not bound to the candidate submission")
+            self._result_url(p["public_result_url"], p["submission_id"])
+            if p["source"] != "trusted-clerk/conjectures.io-human-review":
+                raise ProtocolError("resolution source is invalid")
+            if (
+                candidate["status"] != "APPROVED"
+                or review is None
+                or review["event_id"] != p["review_event_id"]
+                or p["resolution"] != "SOLVED"
+            ):
+                raise ProtocolError("case resolution requires the exact approved review event")
+            if s["resolutions"]:
+                raise ProtocolError("case already has a resolution")
+            _text(p["note"], "resolution.note", 2000)
+            return
+        raise ProtocolError("unsupported maintainer event")
+
+    def _task_binding(self, value: dict[str, Any]) -> None:
+        task = self.problem["task"]
+        for key in ("task_id", "task_commitment", "formal_repository_pin"):
+            if value.get(key) != task[key]:
+                raise ProtocolError("event task identity does not match the pinned problem")
+
+    @staticmethod
+    def _artifact(value: Any, name: str) -> None:
+        if not isinstance(value, dict) or set(value) != {"ref", "sha256"}:
+            raise ProtocolError(f"{name} has invalid fields")
+        _text(value["ref"], f"{name}.ref", 1000)
+        _sha256(value["sha256"], f"{name}.sha256")
+
+    @staticmethod
+    def _result_url(value: Any, submission_id: str) -> None:
+        if value != f"https://conjectures.io/results/{submission_id}":
+            raise ProtocolError("public result URL must match the external submission id")
+
+    @staticmethod
+    def _external_source(
+        source: Any, expected: str | None, evidence: dict[str, Any], result_url: str
+    ) -> None:
+        if source != expected:
+            raise ProtocolError("external observation source is invalid")
+        if evidence["ref"] != result_url:
+            raise ProtocolError("external evidence must digest the canonical public result URL")
+
+    def _bound_candidate(self, value: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        candidate = state["candidates"].get(value.get("candidate_id"))
+        if candidate is None:
+            raise ProtocolError("candidate does not exist")
+        self._task_binding(value)
+        if value.get("artifact_sha256") != candidate["artifact"]["sha256"]:
+            raise ProtocolError("event artifact does not match the sealed candidate")
+        return candidate
 
     @staticmethod
     def _evidence(value: Any) -> None:
@@ -532,6 +808,11 @@ class Workspace:
             "messages": [],
             "handoffs": [],
             "handoff_ids": set(),
+            "handoffs_by_id": {},
+            "candidates": {},
+            "submission_ids": {},
+            "feedback": [],
+            "resolutions": [],
         }
         for e in events:
             p, k, at = e["payload"], e["kind"], _time(e["received_at"])
@@ -567,10 +848,63 @@ class Workspace:
                 c["status"] = "released" if k == "claim_released" else "completed"
                 s["sessions"][p["session_id"]]["active_claim"] = None
                 if k == "handoff_published":
-                    s["handoffs"].append(
-                        {"event_id": e["event_id"], "status": "queued_for_review", **p}
-                    )
+                    handoff = {
+                        "event_id": e["event_id"],
+                        "status": "queued_for_review",
+                        **p,
+                    }
+                    s["handoffs"].append(handoff)
                     s["handoff_ids"].add(p["handoff_id"])
+                    s["handoffs_by_id"][p["handoff_id"]] = handoff
+            elif k == "submission_candidate_published":
+                s["candidates"][p["candidate_id"]] = {
+                    "event_id": e["event_id"],
+                    "received_at": e["received_at"],
+                    "status": "CANDIDATE_READY",
+                    "submission": None,
+                    "verifier": None,
+                    "review": None,
+                    "reward": None,
+                    "feedback": [],
+                    **p,
+                }
+            elif k == "external_submission_receipted":
+                candidate = s["candidates"][p["candidate_id"]]
+                submission = {
+                    "event_id": e["event_id"],
+                    "received_at": e["received_at"],
+                    **p,
+                }
+                candidate["submission"] = submission
+                candidate["status"] = "VERIFICATION_PENDING"
+                s["submission_ids"][p["submission_id"]] = p["candidate_id"]
+            elif k == "candidate_feedback_recorded":
+                candidate = s["candidates"][p["candidate_id"]]
+                feedback = {
+                    "event_id": e["event_id"],
+                    "received_at": e["received_at"],
+                    **p,
+                }
+                candidate["feedback"].append(feedback)
+                s["feedback"].append(feedback)
+                if p["stage"] == "verifier":
+                    candidate["verifier"] = feedback
+                    candidate["status"] = (
+                        "REVIEW_PENDING" if p["decision"] == "VERIFIED" else "REJECTED"
+                    )
+                elif p["stage"] == "review":
+                    candidate["review"] = feedback
+                    candidate["status"] = {
+                        "APPROVED": "APPROVED",
+                        "REJECTED": "REJECTED",
+                        "PARTIAL_AWARD": "PARTIAL_AWARD",
+                    }[p["decision"]]
+                else:
+                    candidate["reward"] = feedback
+            elif k == "case_resolution_recorded":
+                s["resolutions"].append(
+                    {"event_id": e["event_id"], "received_at": e["received_at"], **p}
+                )
         for c in s["claims"].values():
             if c["status"] == "active":
                 if now >= c["deadline"]:
@@ -581,6 +915,82 @@ class Workspace:
                 elif now - c["last_activity"] >= timedelta(seconds=self.config["stale_seconds"]):
                     c["status"] = "stale"
         return s
+
+    @staticmethod
+    def _problem_status(s: dict[str, Any]) -> str:
+        if s["resolutions"]:
+            return "SOLVED"
+        statuses = {candidate["status"] for candidate in s["candidates"].values()}
+        if "APPROVED" in statuses:
+            return "ACCEPTANCE_RECORDED"
+        if "REVIEW_PENDING" in statuses:
+            return "REVIEW_PENDING"
+        if "VERIFICATION_PENDING" in statuses:
+            return "VERIFICATION_PENDING"
+        if "CANDIDATE_READY" in statuses:
+            return "CANDIDATE_READY"
+        if statuses & {"REJECTED", "PARTIAL_AWARD"}:
+            return "OPEN_AFTER_FEEDBACK"
+        return "OPEN"
+
+    def _research_resume(self, s: dict[str, Any]) -> dict[str, Any]:
+        status = self._problem_status(s)
+        if status == "OPEN":
+            return {"action": "START_OR_RESUME_RESEARCH", "feedback": None}
+        if status == "CANDIDATE_READY":
+            ready = next(
+                candidate
+                for candidate in reversed(list(s["candidates"].values()))
+                if candidate["status"] == "CANDIDATE_READY"
+            )
+            return {
+                "action": "AWAIT_EXTERNAL_SUBMISSION",
+                "candidate_id": ready["candidate_id"],
+                "feedback": None,
+            }
+        if status in {"VERIFICATION_PENDING", "REVIEW_PENDING"}:
+            pending_status = (
+                "REVIEW_PENDING" if status == "REVIEW_PENDING" else "VERIFICATION_PENDING"
+            )
+            pending = next(
+                candidate
+                for candidate in reversed(list(s["candidates"].values()))
+                if candidate["status"] == pending_status
+            )
+            return {
+                "action": "AWAIT_OFFICIAL_FEEDBACK",
+                "candidate_id": pending["candidate_id"],
+                "submission_id": pending["submission"]["submission_id"],
+                "feedback": pending["verifier"] if status == "REVIEW_PENDING" else None,
+            }
+        if status in {"ACCEPTANCE_RECORDED", "SOLVED"}:
+            accepted = next(
+                candidate
+                for candidate in s["candidates"].values()
+                if candidate["status"] == "APPROVED"
+            )
+            return {
+                "action": (
+                    "STOP_RESEARCH_PRESERVE_EVIDENCE"
+                    if status == "SOLVED"
+                    else "AWAIT_TRUSTED_CLERK_FINALIZATION"
+                ),
+                "candidate_id": accepted["candidate_id"],
+                "submission_id": accepted["submission"]["submission_id"],
+                "feedback": accepted["review"],
+            }
+        returned = next(
+            candidate
+            for candidate in reversed(list(s["candidates"].values()))
+            if candidate["status"] in {"REJECTED", "PARTIAL_AWARD"}
+        )
+        terminal = returned["review"] or returned["verifier"]
+        return {
+            "action": "CONTINUE_RESEARCH_FROM_FEEDBACK",
+            "candidate_id": returned["candidate_id"],
+            "submission_id": returned["submission"]["submission_id"],
+            "feedback": terminal,
+        }
 
     def _public(self, s: dict[str, Any], now: datetime) -> dict[str, Any]:
         claims = [
@@ -598,6 +1008,8 @@ class Workspace:
         ]
         return {
             "problem_id": self.problem["problem_id"],
+            "problem_status": self._problem_status(s),
+            "research_resume": self._research_resume(s),
             "sessions": sorted(
                 [
                     {
@@ -612,6 +1024,13 @@ class Workspace:
             "checkpoints": s["checkpoints"],
             "messages": s["messages"],
             "handoffs": s["handoffs"],
+            "candidates": list(s["candidates"].values()),
+            "feedback": s["feedback"],
+            "resolutions": s["resolutions"],
+            "external_status_trust": {
+                "mode": "trusted_clerk_observation",
+                "authenticated_external_attestation": False,
+            },
         }
 
     def state(self, now: str) -> dict[str, Any]:
@@ -650,8 +1069,9 @@ class Workspace:
                 "handoffs_queued": [x["handoff_id"] for x in s["handoffs"]],
                 "warnings": warnings,
                 "limitations": (
-                    "Projection only: no mathematical validation, curation, credit review, "
-                    "or payment."
+                    "Projection only. Maintainer signatures attest local recording, not external "
+                    "reviewer authorship. No submission, mathematical validation, credit decision, "
+                    "wallet action, or payment is performed by this projection."
                 ),
             }
             status = {**projected, "at": received_at}

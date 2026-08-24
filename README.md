@@ -21,12 +21,13 @@ The repository is a working protocol skeleton, not a deployed subnet, escrow,
 or decentralized court.
 
 The workspace extension focuses on asynchronous, durable research handoffs
-between many short-lived agent sessions. Its v0.3 CLI imports a pinned
+between many short-lived agent sessions. Its v0.4 CLI imports a pinned
 Conjectures task, signs participant events, exposes expiring work claims and
-problem chat, and runs a deterministic maintainer projection. An optional
+problem chat, seals local solution candidates, records evidence-backed external
+review observations, and runs a deterministic maintainer projection. An optional
 low-cost Codex advisor can suggest operational actions, but cannot curate
 mathematics or decide credit. See [Boule workspace protocol
-v0.3](docs/workspace-protocol-v0.3.md).
+v0.4](docs/workspace-protocol-v0.4.md).
 
 ## Why Boule
 
@@ -70,6 +71,47 @@ uv run boule agent handoff problems/erdos686-erdos-686-variants-four \
   --summary "rank certificate still missing" \
   --next "reproduce the rank independently" --reproduce "make verify-k5"
 ```
+
+When an `ADVANCE` handoff contains the exact proposed solution, its session can
+seal a candidate:
+
+```bash
+uv run boule submit problems/erdos686-erdos-686-variants-four \
+  --session SESSION_ID --handoff HANDOFF_ID --artifact Solution.lean \
+  --summary "solves the exact pinned task" \
+  --reproduce "lake env lean Solution.lean"
+```
+
+This is deliberately local. It creates no Conjectures submission ID, makes no
+network request, authorizes no fee, and proves no acceptance. After an
+authorized operator has separately submitted through Conjectures and preserved
+the canonical public result as evidence, the trusted maintainer can record the
+observed lifecycle:
+
+```bash
+uv run boule maintainer record-submission PROBLEM \
+  --candidate CANDIDATE --submission-id RESULT_UUID \
+  --receipt 'sha256:SNAPSHOT_DIGEST'
+uv run boule maintainer feedback PROBLEM \
+  --candidate CANDIDATE --stage verifier --decision VERIFIED \
+  --reason-code LEAN_VERIFIED --summary "exact file accepted by Lean" \
+  --next "await human review" \
+  --report 'sha256:SNAPSHOT_DIGEST'
+uv run boule maintainer feedback PROBLEM \
+  --candidate CANDIDATE --stage review --decision APPROVED \
+  --reason-code REVIEW_APPROVED --summary "human review approved" \
+  --next "finalize the local case" \
+  --report 'sha256:SNAPSHOT_DIGEST'
+uv run boule maintainer finalize PROBLEM --candidate CANDIDATE
+```
+
+`VERIFIED` alone moves the candidate to `REVIEW_PENDING`. Review rejection or a
+partial award reopens research and injects the recorded reason and next action
+into `boule brief`; approval first becomes `ACCEPTANCE_RECORDED`, and only the
+separate local finalization changes the case to `SOLVED`. Reward eligibility is
+recorded separately, while payout is intentionally outside this command flow.
+In v0.4 these external facts are trusted-clerk observations of a canonical
+public page, not cryptographically authenticated Conjectures attestations.
 
 Session private keys stay below the ignored `.boule/private/` directory with
 mode `0600`. The command output contains their public identity and local profile
