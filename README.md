@@ -49,7 +49,7 @@ contains that release, install the exact reviewed branch:
 
 ```bash
 git clone --branch feature/boule-hub-v06 --single-branch \
-  https://github.com/DaryxXx/daryxx-boule-protocol.git
+  https://github.com/BouleProtocol/daryxx-boule-protocol.git
 cd daryxx-boule-protocol
 uv sync --extra dev --python 3.12
 uv run boule --help
@@ -59,7 +59,7 @@ Or install that branch directly:
 
 ```bash
 uv tool install \
-  git+https://github.com/DaryxXx/daryxx-boule-protocol.git@feature/boule-hub-v06
+  git+https://github.com/BouleProtocol/daryxx-boule-protocol.git@feature/boule-hub-v06
 boule --help
 ```
 

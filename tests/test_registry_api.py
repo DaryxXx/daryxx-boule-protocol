@@ -188,6 +188,8 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
         assert "innerHTML" not in script
         assert "Maintainer Running" in page
         assert "Open Boule on GitHub" in page
+        assert "github.com/BouleProtocol/daryxx-boule-protocol" in page
+        assert "github.com/DaryxXx/daryxx-boule-protocol" not in page
         assert '<body id="top">' in page
         assert 'class="brand" href="#top"' in page
         assert ">by conjectures.io</a>" in page
