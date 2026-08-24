@@ -41,3 +41,11 @@ attempt metadata, fixed private-artifact digests, safe summaries, controller
 disclosure, and hashes of a local signed replay. The chat and mathematical
 artifacts remain private; no allocation is admissible before evidence sealing
 and independent review.
+
+Round 7 tests cold continuation. A fresh session received the fixed council
+handoff through a mechanical context pack, executed the chair-selected bounded
+test, and returned a route-level `NEGATIVE`. Its public anchor is explicitly
+retrospective, so it creates no claim of pre-work public priority. The handoff
+publishes only dependency and artifact hashes, a safe outcome classification,
+and the enforced compute boundary. The mathematical bytes remain withheld;
+the target is unsolved and credit remains unadjudicated.
