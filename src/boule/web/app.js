@@ -1,6 +1,7 @@
 /* Boule public observatory.
- * Reads same-origin GET /v1/live and renders the problem index, activity
- * timeline, and handoff dependency graph. No other network calls, no storage.
+ * Reads same-origin GET /v1/live and renders the network pulse, problem
+ * index, activity trace, and handoff dependency graph. No other network
+ * calls, no storage.
  */
 (function () {
   "use strict";
@@ -24,7 +25,14 @@
     graphState: document.getElementById("graph-state"),
     graphFigure: document.getElementById("graph-figure"),
     graphHolder: document.getElementById("graph-holder"),
-    graphCaption: document.getElementById("graph-caption")
+    graphCaption: document.getElementById("graph-caption"),
+    observatoryGrid: document.querySelector(".observatory-grid"),
+    pulseState: document.getElementById("pulse-state"),
+    pulseProblems: document.getElementById("pulse-problems"),
+    pulseAgents: document.getElementById("pulse-agents"),
+    pulseClaims: document.getElementById("pulse-claims"),
+    pulseEvents: document.getElementById("pulse-events"),
+    pulseMeta: document.getElementById("pulse-meta")
   };
 
   var lastGoodAt = null;
@@ -128,6 +136,74 @@
     return null;
   }
 
+  /* ---------- network pulse ---------- */
+
+  /* Sums a per-problem collection; null when no problem publishes it, so the
+   * pulse never invents a zero. */
+  function sumCollections(problems, key) {
+    var total = 0;
+    var known = false;
+    problems.forEach(function (p) {
+      if (!isObject(p)) return;
+      var count = normalizeCollection(p[key]).count;
+      if (count !== null) {
+        total += count;
+        known = true;
+      }
+    });
+    return known ? total : null;
+  }
+
+  function sumEventCounts(problems) {
+    var total = 0;
+    var known = false;
+    problems.forEach(function (p) {
+      if (isObject(p) && typeof p.event_count === "number" && isFinite(p.event_count) && p.event_count >= 0) {
+        total += p.event_count;
+        known = true;
+      }
+    });
+    return known ? total : null;
+  }
+
+  function setPulseValue(cell, value) {
+    if (value === null) {
+      cell.textContent = "—";
+      cell.classList.add("pulse-unknown");
+    } else {
+      cell.textContent = String(value);
+      cell.classList.remove("pulse-unknown");
+    }
+  }
+
+  function renderPulse(problems) {
+    setPulseValue(els.pulseProblems, problems.length);
+    setPulseValue(els.pulseAgents, sumCollections(problems, "active_agents"));
+    setPulseValue(els.pulseClaims, sumCollections(problems, "active_claims"));
+    setPulseValue(els.pulseEvents, sumEventCounts(problems));
+    els.pulseState.textContent = "LIVE";
+    els.pulseState.className = "pulse-state pulse-state-live";
+    els.pulseMeta.textContent = "Snapshot from this origin's /v1/live at " +
+      fmtClock(lastGoodAt) + ". Unpublished figures show as —.";
+  }
+
+  function pulseFailure() {
+    if (lastGoodAt) {
+      els.pulseState.textContent = "STALE";
+      els.pulseState.className = "pulse-state pulse-state-stale";
+      els.pulseMeta.textContent = "Refresh failed. Figures are from the snapshot taken at " +
+        fmtClock(lastGoodAt) + ".";
+      return;
+    }
+    els.pulseState.textContent = "OFFLINE";
+    els.pulseState.className = "pulse-state pulse-state-down";
+    setPulseValue(els.pulseProblems, null);
+    setPulseValue(els.pulseAgents, null);
+    setPulseValue(els.pulseClaims, null);
+    setPulseValue(els.pulseEvents, null);
+    els.pulseMeta.textContent = "Could not read /v1/live from this origin. No figures are shown rather than invented ones.";
+  }
+
   /* ---------- state panels ---------- */
 
   function showPanel(panel, title, detail, withRetry) {
@@ -220,7 +296,7 @@
 
       var cMode = td("Mode", "mono-cell");
       var mode = asString(p.task_mode);
-      if (mode) cMode.textContent = mode;
+      if (mode) cMode.appendChild(el("span", "mode-tag", mode));
       else cMode.appendChild(el("span", "unknown-mark", "—"));
       row.appendChild(cMode);
 
@@ -231,6 +307,11 @@
         if (p.status_source === "case_clerk_projection") {
           cStatus.appendChild(el("span", "trust-mark", "clerk-observed"));
           cStatus.title = "This is a signed Boule clerk observation, not an authenticated source attestation.";
+        }
+        if (p.live_stale === true) {
+          var staleMark = el("span", "stale-mark stale-block", "projection stale");
+          staleMark.title = "The clerk projection for this case could not be refreshed; showing its last verified state.";
+          cStatus.appendChild(staleMark);
         }
       }
       else cStatus.appendChild(el("span", "unknown-mark", "—"));
@@ -273,16 +354,17 @@
     });
   }
 
-  /* ---------- activity timeline ---------- */
+  /* ---------- activity trace ---------- */
 
   function activityEntry(raw, problemTitle) {
     if (typeof raw === "string") {
-      return { when: null, kind: null, summary: raw, meta: problemTitle, deps: null, id: null };
+      return { when: null, kind: null, outcome: null, summary: raw, meta: problemTitle, deps: null, id: null };
     }
     if (!isObject(raw)) return null;
     var when = parseIso(asString(raw.received_at) || asString(raw.at) || asString(raw.time) || asString(raw.timestamp) ||
       asString(raw.ts) || asString(raw.updated_at) || asString(raw.created_at));
     var kind = asString(raw.kind) || asString(raw.type) || asString(raw.event) || asString(raw.action);
+    var outcome = asString(raw.outcome);
     var summary = asString(raw.summary) || asString(raw.message) || asString(raw.detail) ||
       asString(raw.title) || asString(raw.description);
     var actor = asString(raw.actor) || asString(raw.agent) || asString(raw.participant) ||
@@ -296,6 +378,7 @@
     return {
       when: when,
       kind: kind,
+      outcome: outcome,
       summary: summary || "(no summary in snapshot)",
       meta: metaBits.join(" · "),
       deps: Array.isArray(raw.depends_on) ? raw.depends_on.filter(function (d) { return typeof d === "string"; }) : null,
@@ -349,9 +432,13 @@
       var body = el("div", "timeline-entry");
       var p = document.createElement("p");
       if (entry.kind) p.appendChild(el("span", "entry-kind", entry.kind));
+      if (entry.outcome) p.appendChild(el("span", "entry-outcome", entry.outcome));
       p.appendChild(document.createTextNode(entry.summary));
       body.appendChild(p);
       if (entry.meta) body.appendChild(el("p", "entry-meta", entry.meta));
+      if (entry.deps && entry.deps.length) {
+        body.appendChild(el("p", "entry-deps", "depends on " + entry.deps.join(", ")));
+      }
       li.appendChild(body);
       els.timelineList.appendChild(li);
     });
@@ -419,12 +506,14 @@
     clear(els.graphHolder);
 
     if (graph.order.length === 0) {
+      els.observatoryGrid.classList.add("graph-empty");
       els.graphFigure.hidden = true;
       showPanel(els.graphState, "No dependency data in the current snapshot.",
         "Handoff dependency edges appear here once the registry publishes activity items with depends_on references.");
       return;
     }
 
+    els.observatoryGrid.classList.remove("graph-empty");
     els.graphState.hidden = true;
     els.graphFigure.hidden = false;
 
@@ -513,6 +602,7 @@
     lastGoodAt = new Date();
     els.staleNote.hidden = true;
     els.refreshMeta.textContent = "Updated " + fmtClock(lastGoodAt) + " · auto every 30s";
+    renderPulse(problems);
     renderProblems(problems);
     renderTimeline(problems);
     renderGraph(problems);
@@ -521,6 +611,7 @@
   }
 
   function onFailure(reason) {
+    pulseFailure();
     if (lastGoodAt) {
       /* Keep the last good snapshot on screen; note quietly that it is stale. */
       els.staleNote.hidden = false;

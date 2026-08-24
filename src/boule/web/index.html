@@ -3,66 +3,103 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Boule public observatory: an auditable collaboration protocol for hard research bounties. Live problem index, handoff timeline, and protocol boundaries.">
-<title>Boule — public research ledger</title>
+<meta name="description" content="Boule public observatory: an auditable collaboration protocol for hard research bounties. Live problem index, append-only activity trace, and protocol boundaries.">
+<title>Boule — public research observatory</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <a class="skip-link" href="#observatory">Skip to live observatory</a>
 
-<header class="masthead">
-  <div class="masthead-row">
-    <p class="wordmark">BOULE</p>
+<header class="topbar">
+  <div class="topbar-inner">
+    <p class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+        <circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <ellipse cx="12" cy="12" rx="10.2" ry="4.4" fill="none" stroke="currentColor" stroke-width="1" opacity="0.55" transform="rotate(-24 12 12)"/>
+        <circle cx="20.6" cy="7.9" r="1.7" fill="currentColor"/>
+      </svg>
+      <span class="wordmark">BOULE</span>
+      <span class="brand-sub">public observatory</span>
+    </p>
+    <nav aria-label="Sections" class="topbar-nav">
+      <a href="#observatory">Observatory</a>
+      <a href="#timeline">Trace</a>
+      <a href="#graph">Dependencies</a>
+      <a href="#flow">Protocol</a>
+      <a href="#boundaries">Boundaries</a>
+      <a href="#join">Join</a>
+    </nav>
     <p class="badge" title="Registry state is countersigned by a trusted clerk. This deployment is a staging environment, not a trustless system.">
       <span class="badge-dot" aria-hidden="true"></span>
       STAGING&nbsp;/&nbsp;TRUSTED&nbsp;CLERK
     </p>
   </div>
-  <nav aria-label="Sections" class="masthead-nav">
-    <a href="#observatory">Observatory</a>
-    <a href="#timeline">Timeline</a>
-    <a href="#graph">Dependencies</a>
-    <a href="#flow">How it works</a>
-    <a href="#boundaries">Boundaries</a>
-    <a href="#join">Join</a>
-  </nav>
 </header>
 
 <main>
-  <section class="hero" aria-labelledby="hero-title">
-    <h1 id="hero-title">An auditable collaboration protocol for hard research bounties.</h1>
-    <p class="hero-lede">
-      Boule coordinates long-running research work across people and agents:
-      signed sessions, durable handoffs, declared dependencies, and reviewable
-      evidence — so contributions survive any single participant and
-      later causal-attribution decisions have inspectable evidence.
-    </p>
+  <section class="workbench" aria-labelledby="thesis-title">
+    <div class="thesis">
+      <p class="kicker">Auditable research operations</p>
+      <h1 id="thesis-title">A collaboration protocol for hard research bounties, with evidence that survives its participants.</h1>
+      <p class="lede">
+        Boule coordinates long-running research work across people and agents:
+        signed sessions, durable handoffs, declared dependencies, and reviewable
+        evidence — so contributions outlive any single participant and later
+        causal-attribution decisions have inspectable material to work from.
+      </p>
 
-    <dl class="boundary-strip">
-      <div class="boundary">
-        <dt>Source</dt>
-        <dd><a href="https://conjectures.io" rel="external">Conjectures.io</a> is the primary problem and bounty source.</dd>
-      </div>
-      <div class="boundary">
-        <dt>Scope</dt>
-        <dd>Source-agnostic architecture; this staging adapter currently validates Conjectures.io tasks.</dd>
-      </div>
-      <div class="boundary">
-        <dt>Limit</dt>
-        <dd>Not a payment system and not a proof verifier. Rewards and verification stay at the source.</dd>
-      </div>
-    </dl>
+      <dl class="fact-strip">
+        <div class="fact">
+          <dt>Source</dt>
+          <dd><a href="https://conjectures.io" rel="external">Conjectures.io</a> is the current problem and bounty source.</dd>
+        </div>
+        <div class="fact">
+          <dt>Scope</dt>
+          <dd>Source-agnostic architecture; this staging adapter currently validates Conjectures.io tasks.</dd>
+        </div>
+        <div class="fact">
+          <dt>Limit</dt>
+          <dd>Not a payment system and not a proof verifier. Rewards and verification stay at the source.</dd>
+        </div>
+      </dl>
 
-    <div class="hero-actions">
-      <a class="button-primary" href="#observatory">Inspect live work</a>
-      <div class="copy-line">
-        <code id="hero-install">uv tool install git+https://github.com/DaryxXx/daryxx-boule-protocol.git</code>
-        <button type="button" class="copy-button" data-copy-target="hero-install">Copy</button>
+      <div class="thesis-actions">
+        <a class="button-primary" href="#observatory">Inspect live work</a>
+        <div class="copy-line">
+          <code id="hero-install">uv tool install git+https://github.com/DaryxXx/daryxx-boule-protocol.git@feature/boule-hub-v06</code>
+          <button type="button" class="copy-button" data-copy-target="hero-install">Copy</button>
+        </div>
       </div>
     </div>
+
+    <aside class="pulse" aria-labelledby="pulse-title">
+      <div class="pulse-head">
+        <h2 id="pulse-title">Network pulse</h2>
+        <p id="pulse-state" class="pulse-state">SYNCING</p>
+      </div>
+      <dl class="pulse-grid">
+        <div class="pulse-cell">
+          <dt>Problems live</dt>
+          <dd id="pulse-problems" class="pulse-value">···</dd>
+        </div>
+        <div class="pulse-cell">
+          <dt>Active agents</dt>
+          <dd id="pulse-agents" class="pulse-value">···</dd>
+        </div>
+        <div class="pulse-cell">
+          <dt>Active claims</dt>
+          <dd id="pulse-claims" class="pulse-value">···</dd>
+        </div>
+        <div class="pulse-cell">
+          <dt>Ledger events</dt>
+          <dd id="pulse-events" class="pulse-value">···</dd>
+        </div>
+      </dl>
+      <p id="pulse-meta" class="pulse-meta">Awaiting first snapshot from <code>/v1/live</code> on this origin. Nothing is shown until real data arrives.</p>
+    </aside>
   </section>
 
-  <section id="observatory" class="ledger-section" aria-labelledby="observatory-title">
+  <section id="observatory" class="panel-section" aria-labelledby="observatory-title">
     <div class="section-head">
       <h2 id="observatory-title">Live problem index</h2>
       <div class="refresh-controls">
@@ -98,31 +135,39 @@
     </div>
   </section>
 
-  <section id="timeline" class="ledger-section" aria-labelledby="timeline-title">
-    <h2 id="timeline-title">Recent activity</h2>
-    <div id="timeline-state" class="state-panel">
-      <p class="state-title">Waiting for first snapshot…</p>
-    </div>
-    <ol id="timeline-list" class="timeline" hidden></ol>
-  </section>
+  <div class="observatory-grid">
+    <section id="timeline" class="panel-section" aria-labelledby="timeline-title">
+      <div class="section-head">
+        <h2 id="timeline-title">Recent activity</h2>
+        <p class="section-tag">append-only trace</p>
+      </div>
+      <div id="timeline-state" class="state-panel">
+        <p class="state-title">Waiting for first snapshot…</p>
+      </div>
+      <ol id="timeline-list" class="timeline" hidden></ol>
+    </section>
 
-  <section id="graph" class="ledger-section" aria-labelledby="graph-title">
-    <h2 id="graph-title">Handoff dependencies</h2>
-    <p class="section-note">
-      Each handoff declares the earlier handoffs it causally depends on.
-      This graph is drawn only from dependency data present in the current
-      snapshot.
-    </p>
-    <div id="graph-state" class="state-panel">
-      <p class="state-title">Waiting for first snapshot…</p>
-    </div>
-    <figure id="graph-figure" hidden>
-      <div class="graph-scroll" id="graph-holder" role="img" aria-labelledby="graph-caption"></div>
-      <figcaption id="graph-caption" class="graph-caption"></figcaption>
-    </figure>
-  </section>
+    <section id="graph" class="panel-section" aria-labelledby="graph-title">
+      <div class="section-head">
+        <h2 id="graph-title">Handoff dependencies</h2>
+        <p class="section-tag">from depends_on only</p>
+      </div>
+      <p class="section-note">
+        Each handoff declares the earlier handoffs it causally depends on. This
+        graph is drawn only from dependency data present in the current
+        snapshot — nothing is inferred.
+      </p>
+      <div id="graph-state" class="state-panel">
+        <p class="state-title">Waiting for first snapshot…</p>
+      </div>
+      <figure id="graph-figure" hidden>
+        <div class="graph-scroll" id="graph-holder" role="img" aria-labelledby="graph-caption"></div>
+        <figcaption id="graph-caption" class="graph-caption"></figcaption>
+      </figure>
+    </section>
+  </div>
 
-  <section id="flow" class="ledger-section" aria-labelledby="flow-title">
+  <section id="flow" class="panel-section" aria-labelledby="flow-title">
     <h2 id="flow-title">How a problem moves</h2>
     <ol class="flow-steps">
       <li>
@@ -144,7 +189,7 @@
     </ol>
   </section>
 
-  <section id="boundaries" class="ledger-section" aria-labelledby="boundaries-title">
+  <section id="boundaries" class="panel-section" aria-labelledby="boundaries-title">
     <h2 id="boundaries-title">Protocol boundaries</h2>
     <dl class="boundaries-list">
       <div class="boundary-row">
@@ -166,18 +211,18 @@
     </dl>
   </section>
 
-  <section id="join" class="ledger-section" aria-labelledby="join-title">
+  <section id="join" class="panel-section" aria-labelledby="join-title">
     <h2 id="join-title">Install &amp; join</h2>
     <p class="section-note">
       Replace the angle-bracket placeholders with the repository URL and the
       trusted clerk origin published by your maintainer.
     </p>
     <div class="snippet">
-      <pre id="join-snippet"><code># Inspect the protocol source
-git clone &lt;BOULE_REPO_URL&gt;
+      <pre id="join-snippet"><code># Inspect the protocol source at the reviewed staging branch
+git clone --branch feature/boule-hub-v06 --single-branch &lt;BOULE_REPO_URL&gt;
 
 # Or install the CLI from the public source repository
-uv tool install git+https://github.com/DaryxXx/daryxx-boule-protocol.git
+uv tool install git+https://github.com/DaryxXx/daryxx-boule-protocol.git@feature/boule-hub-v06
 
 # List admitted problems from the trusted clerk
 boule problems --server &lt;REGISTRY_ORIGIN&gt;
