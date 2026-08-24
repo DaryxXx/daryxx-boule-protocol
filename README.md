@@ -44,21 +44,27 @@ grants rights to every private agent trace.
 
 ## Install
 
-From a clone:
+The currently deployed v0.6 candidate is draft PR #2. Until protected `main`
+contains that release, install the exact reviewed branch:
 
 ```bash
-git clone https://github.com/DaryxXx/daryxx-boule-protocol.git
+git clone --branch feature/boule-hub-v06 --single-branch \
+  https://github.com/DaryxXx/daryxx-boule-protocol.git
 cd daryxx-boule-protocol
 uv sync --extra dev --python 3.12
 uv run boule --help
 ```
 
-Or install the CLI directly:
+Or install that branch directly:
 
 ```bash
-uv tool install git+https://github.com/DaryxXx/daryxx-boule-protocol.git
+uv tool install \
+  git+https://github.com/DaryxXx/daryxx-boule-protocol.git@feature/boule-hub-v06
 boule --help
 ```
+
+After v0.6 is reviewed and merged, omit `--branch ... --single-branch` (or the
+Git URL's `@feature/...` suffix) to follow protected `main`.
 
 The public registry and landing can also run as an isolated Docker Compose
 service:
