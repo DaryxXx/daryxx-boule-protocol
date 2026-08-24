@@ -406,11 +406,89 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   color: var(--chalk-faint); margin-top: 0.25rem;
 }
 .mono-cell { font-size: 0.82rem; color: var(--chalk-dim); }
-.agent-names {
-  display: block; margin-top: 0.25rem; color: var(--green);
-  font-size: 0.72rem; white-space: normal; overflow-wrap: anywhere;
-}
 .cell-links { display: inline-flex; gap: 0.7rem; }
+
+/* ---------- agents-on-record roster ----------
+ * "On record" = a signed handoff or active claim exists in the ledger.
+ * The styling must never read as accepted credit: review state is always
+ * printed next to the name.
+ */
+
+.cell-roster { min-width: 13rem; }
+.roster-count {
+  display: inline-block; font-family: var(--font-display); font-weight: 600;
+  font-size: 1rem; color: var(--chalk); margin-right: 0.6rem;
+}
+.roster-active-note {
+  display: inline-block; font-family: var(--font-mono); font-size: 0.68rem;
+  letter-spacing: 0.06em; color: var(--chalk-faint);
+  border: 1px solid var(--panel-edge); border-radius: 999px;
+  padding: 0.08rem 0.5rem; white-space: nowrap;
+}
+.roster-active-note-live { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+.roster-empty {
+  display: inline-block; font-size: 0.85rem; color: var(--chalk-dim);
+  font-style: italic; margin-right: 0.6rem;
+}
+
+.roster {
+  list-style: none; margin: 0.55rem 0 0; padding: 0;
+  border-top: 1px solid var(--panel-edge);
+}
+.roster-agent {
+  display: flex; align-items: flex-start; gap: 0.55rem;
+  padding: 0.45rem 0; border-bottom: 1px solid var(--panel-edge);
+}
+.roster-monogram {
+  flex: none; width: 1.6rem; height: 1.6rem; margin-top: 0.1rem;
+  display: inline-grid; place-items: center;
+  border: 1px solid var(--chalk-faint); border-radius: 50%;
+  font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.04em;
+  color: var(--chalk-dim); background: var(--board-deep);
+}
+.roster-active .roster-monogram {
+  border-color: var(--green); color: var(--green);
+}
+.roster-body { min-width: 0; display: block; }
+.roster-name-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.roster-name {
+  font-family: var(--font-display); font-weight: 600; font-size: 0.98rem;
+  color: var(--chalk); overflow-wrap: anywhere;
+}
+.roster-state {
+  font-family: var(--font-mono); font-size: 0.64rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--chalk-faint);
+}
+.roster-state-active { color: var(--green); }
+.roster-identity {
+  font-family: var(--font-mono); font-size: 0.62rem; color: var(--blue);
+  letter-spacing: 0.04em;
+}
+.roster-meta {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.6rem;
+  margin-top: 0.15rem;
+  font-family: var(--font-mono); font-size: 0.68rem; color: var(--chalk-dim);
+}
+.roster-outcome {
+  letter-spacing: 0.06em; text-transform: uppercase;
+  border: 1px solid var(--panel-edge); border-radius: 3px;
+  padding: 0.05rem 0.35rem; color: var(--chalk-dim);
+}
+.roster-outcome-advance { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+.roster-outcome-negative { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+.roster-outcome-no-signal { color: var(--chalk-faint); }
+.roster-review { color: var(--yellow); }
+.roster-bit { white-space: nowrap; }
+.roster-sub {
+  display: block; margin-top: 0.1rem;
+  font-family: var(--font-mono); font-size: 0.66rem; color: var(--chalk-faint);
+  overflow-wrap: anywhere;
+}
+.roster-derived {
+  display: block; margin-top: 0.4rem;
+  font-family: var(--font-mono); font-size: 0.64rem; color: var(--chalk-faint);
+  font-style: italic;
+}
 
 .mode-tag {
   font-family: var(--font-mono); font-size: 0.75rem;
@@ -458,7 +536,7 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
 .pulse-state-down { color: var(--red); }
 
 .pulse-grid {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1rem 2rem; margin: 1rem 0 0.8rem;
 }
 .pulse-cell dt {
@@ -674,6 +752,7 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   .flow-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .boundaries-list { grid-template-columns: 1fr; }
   .observatory-grid, .observatory-grid.graph-empty { grid-template-columns: 1fr; }
+  .pulse-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {

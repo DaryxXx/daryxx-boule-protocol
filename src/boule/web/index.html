@@ -160,14 +160,14 @@
 
       <div id="problems-wrap" class="table-wrap" hidden>
         <table class="ledger-table" id="problems-table">
-          <caption class="visually-hidden">Admitted problems with source, mode, status, activity, and links</caption>
+          <caption class="visually-hidden">Admitted problems with source, mode, status, agents on record through active claims or signed handoffs, review state, activity, and links</caption>
           <thead>
             <tr>
               <th scope="col">Problem</th>
               <th scope="col">Source</th>
               <th scope="col">Mode</th>
               <th scope="col">Status</th>
-              <th scope="col">Agents</th>
+              <th scope="col">Agents on record</th>
               <th scope="col">Claims</th>
               <th scope="col">Activity</th>
               <th scope="col">Links</th>
@@ -198,7 +198,11 @@
             <dd id="pulse-problems" class="pulse-value">···</dd>
           </div>
           <div class="pulse-cell">
-            <dt>Active agents</dt>
+            <dt>Agents on record</dt>
+            <dd id="pulse-roster" class="pulse-value">···</dd>
+          </div>
+          <div class="pulse-cell">
+            <dt>Active now</dt>
             <dd id="pulse-agents" class="pulse-value">···</dd>
           </div>
           <div class="pulse-cell">

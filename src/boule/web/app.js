@@ -30,6 +30,7 @@
     observatoryGrid: document.querySelector(".observatory-grid"),
     pulseState: document.getElementById("pulse-state"),
     pulseProblems: document.getElementById("pulse-problems"),
+    pulseRoster: document.getElementById("pulse-roster"),
     pulseAgents: document.getElementById("pulse-agents"),
     pulseClaims: document.getElementById("pulse-claims"),
     pulseEvents: document.getElementById("pulse-events"),
@@ -136,6 +137,108 @@
     return { count: null, staleCount: null, items: null };
   }
 
+  /* ---------- agents on record ----------
+   * A roster entry means "this participant has an active claim and/or a
+   * signed handoff on record". It is NOT an accepted
+   * attribution, verifier acceptance, or prize allocation.
+   */
+
+  function reviewLabel(v) {
+    var s = asString(v);
+    if (!s) return null;
+    return s.replace(/_/g, " ");
+  }
+
+  function normalizeRecordEntry(item) {
+    if (!isObject(item)) return null;
+    var name = asString(item.participant_id) || asString(item.label);
+    if (!name) return null;
+    return {
+      name: name,
+      identityId: asString(item.identity_id),
+      active: item.active === true ? true : item.active === false ? false : null,
+      workStatus: asString(item.work_status),
+      handoffCount: typeof item.handoff_count === "number" && isFinite(item.handoff_count) && item.handoff_count >= 0
+        ? item.handoff_count : null,
+      outcome: asString(item.latest_outcome),
+      handoffId: asString(item.latest_handoff_id),
+      latestAt: parseIso(asString(item.latest_at)),
+      review: reviewLabel(item.review_status)
+    };
+  }
+
+  /* Returns { entries: [...], derived: bool } or null when the snapshot
+   * publishes nothing this roster could honestly be built from. */
+  function agentsOnRecord(p) {
+    if (Array.isArray(p.agents_on_record)) {
+      var entries = [];
+      p.agents_on_record.forEach(function (item) {
+        var e = normalizeRecordEntry(item);
+        if (e) entries.push(e);
+      });
+      return { entries: entries, derived: false };
+    }
+    if (!Array.isArray(p.recent_activity)) return null;
+    /* Conservative fallback: current work comes only from active_agents and
+     * historical work only from items whose kind is exactly "handoff". */
+    var activeNames = [];
+    if (Array.isArray(p.active_agents)) {
+      p.active_agents.forEach(function (item) {
+        var n = isObject(item) ? (asString(item.participant_id) || asString(item.label)) : null;
+        if (n && activeNames.indexOf(n) < 0) activeNames.push(n);
+      });
+    }
+    var byName = {};
+    var order = [];
+    activeNames.forEach(function (name) {
+      byName[name] = {
+        name: name,
+        identityId: null,
+        active: true,
+        workStatus: "active",
+        handoffCount: 0,
+        outcome: null, handoffId: null, latestAt: null,
+        review: null
+      };
+      order.push(name);
+    });
+    p.recent_activity.forEach(function (raw) {
+      if (!isObject(raw) || asString(raw.kind) !== "handoff") return;
+      var name = asString(raw.actor) || asString(raw.agent) || asString(raw.participant);
+      if (!name) return;
+      var when = parseIso(asString(raw.received_at) || asString(raw.at) || asString(raw.time) || asString(raw.timestamp));
+      if (!byName[name]) {
+        byName[name] = {
+          name: name,
+          identityId: null,
+          active: activeNames.indexOf(name) >= 0 ? true : null,
+          workStatus: activeNames.indexOf(name) >= 0 ? "active" : null,
+          handoffCount: 0,
+          outcome: null, handoffId: null, latestAt: null,
+          review: null
+        };
+        order.push(name);
+      }
+      var rec = byName[name];
+      rec.handoffCount++;
+      if (!rec.latestAt || (when && when.getTime() > rec.latestAt.getTime())) {
+        rec.latestAt = when || rec.latestAt;
+        if (asString(raw.outcome)) rec.outcome = asString(raw.outcome);
+        var id = asString(raw.handoff_id) || asString(raw.id);
+        if (id) rec.handoffId = id;
+      }
+    });
+    var derived = order.map(function (n) { return byName[n]; });
+    derived.sort(function (a, b) {
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      if (a.latestAt && b.latestAt) return b.latestAt.getTime() - a.latestAt.getTime();
+      if (a.latestAt) return -1;
+      if (b.latestAt) return 1;
+      return 0;
+    });
+    return { entries: derived, derived: true };
+  }
+
   function extractProblems(payload) {
     if (!isObject(payload)) return null;
     if (Array.isArray(payload.problems)) return payload.problems;
@@ -175,6 +278,22 @@
     return known ? total : null;
   }
 
+  /* Sums the on-record rosters; null when no problem publishes (or lets us
+   * conservatively derive) one, so the pulse never invents a zero. */
+  function sumOnRecord(problems) {
+    var total = 0;
+    var known = false;
+    problems.forEach(function (p) {
+      if (!isObject(p)) return;
+      var roster = agentsOnRecord(p);
+      if (roster !== null) {
+        total += roster.entries.length;
+        known = true;
+      }
+    });
+    return known ? total : null;
+  }
+
   function setPulseValue(cell, value) {
     if (value === null) {
       cell.textContent = "—";
@@ -187,6 +306,7 @@
 
   function renderPulse(problems) {
     setPulseValue(els.pulseProblems, problems.length);
+    setPulseValue(els.pulseRoster, sumOnRecord(problems));
     setPulseValue(els.pulseAgents, sumCollections(problems, "active_agents"));
     setPulseValue(els.pulseClaims, sumCollections(problems, "active_claims"));
     setPulseValue(els.pulseEvents, sumEventCounts(problems));
@@ -207,6 +327,7 @@
     els.pulseState.textContent = "OFFLINE";
     els.pulseState.className = "pulse-state pulse-state-down";
     setPulseValue(els.pulseProblems, null);
+    setPulseValue(els.pulseRoster, null);
     setPulseValue(els.pulseAgents, null);
     setPulseValue(els.pulseClaims, null);
     setPulseValue(els.pulseEvents, null);
@@ -258,20 +379,104 @@
       (coll.staleCount ? ", " + coll.staleCount + " stale" : ""));
   }
 
-  function renderAgents(cell, coll) {
-    renderCount(cell, coll, "active agents");
-    if (!Array.isArray(coll.items)) return;
-    var names = [];
-    coll.items.forEach(function (item) {
-      if (!isObject(item)) return;
-      var name = asString(item.participant_id) || asString(item.label);
-      if (name && names.indexOf(name) < 0) names.push(name);
+  function monogramFor(name) {
+    var letters = name.replace(/[^A-Za-z0-9]/g, "");
+    return (letters.slice(0, 2) || name.slice(0, 2)).toUpperCase();
+  }
+
+  function identityHint(identityId) {
+    if (!identityId) return null;
+    var bits = identityId.split(":");
+    var value = bits[bits.length - 1];
+    return value ? value.slice(0, 8) : null;
+  }
+
+  /* Person-first roster: who has signed work on record vs. who is active
+   * now. Being on record is not credit — every line carries its review
+   * state. */
+  function renderAgents(cell, p) {
+    var roster = agentsOnRecord(p);
+    var activeColl = normalizeCollection(p.active_agents);
+
+    if (roster === null) {
+      cell.appendChild(el("span", "unknown-mark", "—"));
+      renderActiveNote(cell, activeColl);
+      return;
+    }
+
+    var n = roster.entries.length;
+    if (n === 0) {
+      cell.appendChild(el("span", "roster-empty", "No signed handoffs yet"));
+      renderActiveNote(cell, activeColl);
+      cell.setAttribute("aria-label", "No agents on record: no signed handoffs yet");
+      return;
+    }
+
+    cell.appendChild(el("span", "roster-count", n + " on record"));
+    renderActiveNote(cell, activeColl);
+
+    var nameCounts = {};
+    roster.entries.forEach(function (rec) {
+      nameCounts[rec.name] = (nameCounts[rec.name] || 0) + 1;
     });
-    if (!names.length) return;
-    var visible = names.slice(0, 4);
-    var suffix = names.length > visible.length ? " +" + (names.length - visible.length) : "";
-    cell.appendChild(el("span", "agent-names", visible.join(", ") + suffix));
-    cell.setAttribute("aria-label", coll.count + " active agents: " + names.join(", "));
+    var list = el("ul", "roster");
+    roster.entries.forEach(function (rec) {
+      var li = el("li", "roster-agent" + (rec.active === true ? " roster-active" : ""));
+      var mono = el("span", "roster-monogram", monogramFor(rec.name));
+      mono.setAttribute("aria-hidden", "true");
+      li.appendChild(mono);
+      var body = el("span", "roster-body");
+      var nameLine = el("span", "roster-name-line");
+      nameLine.appendChild(el("strong", "roster-name", rec.name));
+      var hint = nameCounts[rec.name] > 1 ? identityHint(rec.identityId) : null;
+      if (hint) nameLine.appendChild(el("span", "roster-identity", "id " + hint));
+      nameLine.appendChild(el("span",
+        rec.active === true ? "roster-state roster-state-active" : "roster-state",
+        rec.active === true ? "active now" : rec.workStatus === "stale" ? "stale claim" :
+          rec.active === false ? "not active now" : ""));
+      body.appendChild(nameLine);
+      var meta = el("span", "roster-meta");
+      if (rec.outcome) meta.appendChild(el("span", "roster-outcome roster-outcome-" +
+        rec.outcome.toLowerCase().replace(/[^a-z]+/g, "-"), rec.outcome));
+      if (rec.handoffCount !== null) {
+        meta.appendChild(el("span", "roster-bit",
+          rec.handoffCount + " signed handoff" + (rec.handoffCount === 1 ? "" : "s")));
+      }
+      meta.appendChild(el("span", "roster-review", rec.review || "review state not published"));
+      body.appendChild(meta);
+      var subBits = [];
+      if (rec.handoffId) subBits.push(rec.handoffId);
+      if (rec.latestAt) subBits.push(fmtRel(rec.latestAt));
+      if (subBits.length) {
+        var sub = el("span", "roster-sub", subBits.join(" · "));
+        if (rec.latestAt) sub.title = fmtAbs(rec.latestAt);
+        body.appendChild(sub);
+      }
+      li.appendChild(body);
+      list.appendChild(li);
+    });
+    cell.appendChild(list);
+    if (roster.derived) {
+      cell.appendChild(el("span", "roster-derived",
+        "display-name groups derived from handoff activity in this snapshot"));
+    }
+
+    var names = roster.entries.map(function (r) {
+      var hint = nameCounts[r.name] > 1 ? identityHint(r.identityId) : null;
+      return r.name + (hint ? " identity " + hint : "");
+    });
+    cell.setAttribute("aria-label", n + " agent" + (n === 1 ? "" : "s") +
+      " with active claims and/or signed handoffs on record, not accepted attributions: " +
+      names.join(", ") +
+      (activeColl.count !== null ? ". " + activeColl.count + " active now." : ""));
+  }
+
+  function renderActiveNote(cell, activeColl) {
+    if (activeColl.count === null) return;
+    var note = el("span",
+      activeColl.count > 0 ? "roster-active-note roster-active-note-live" : "roster-active-note",
+      activeColl.count + " active now");
+    cell.appendChild(note);
   }
 
   function renderProblems(problems) {
@@ -342,8 +547,8 @@
       else cStatus.appendChild(el("span", "unknown-mark", "—"));
       row.appendChild(cStatus);
 
-      var cAgents = td("Agents", "mono-cell");
-      renderAgents(cAgents, normalizeCollection(p.active_agents));
+      var cAgents = td("Agents on record", "cell-roster");
+      renderAgents(cAgents, p);
       row.appendChild(cAgents);
 
       var cClaims = td("Claims", "mono-cell");

@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from boule.canonical import digest_bytes
 from boule.case_anchor_store import CaseAnchorStore
 from boule.cli import main
 from boule.crypto import generate_private_key, public_key_text
@@ -179,6 +180,12 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
             script = response.read().decode("utf-8")
         assert "raw.received_at" in script
         assert "clerk-observed" in script
+        assert ">Agents on record<" in page
+        assert 'id="pulse-roster"' in page
+        assert "function agentsOnRecord" in script
+        assert "No signed handoffs yet" in script
+        assert "display-name groups derived" in script
+        assert "innerHTML" not in script
         assert "Maintainer Running" in page
         assert "Open Boule on GitHub" in page
         assert "agent α · claim" in page
@@ -346,13 +353,29 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
                     {
                         "participant_id": "agent-1",
                         "session_id": "session-1",
+                        "controller_key": "controller-key-one",
                         "label": "Proof route",
                         "status": "active",
                     },
                     {
                         "participant_id": "agent-finished",
                         "session_id": "session-finished",
+                        "controller_key": "controller-key-finished",
                         "label": "Completed route",
+                        "status": "active",
+                    },
+                    {
+                        "participant_id": "agent-finished",
+                        "session_id": "session-finished-other",
+                        "controller_key": "controller-key-other",
+                        "label": "Same display name, independent controller",
+                        "status": "active",
+                    },
+                    {
+                        "participant_id": "agent-stale",
+                        "session_id": "session-stale",
+                        "controller_key": "controller-key-stale",
+                        "label": "Stale route",
                         "status": "active",
                     },
                 ],
@@ -364,7 +387,15 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
                         "status": "active",
                         "deadline": "2026-01-01T01:00:00Z",
                         "parallel": False,
-                    }
+                    },
+                    {
+                        "claim_id": "claim-stale",
+                        "session_id": "session-stale",
+                        "route": "route-stale",
+                        "status": "stale",
+                        "deadline": "2026-01-01T00:30:00Z",
+                        "parallel": False,
+                    },
                 ],
                 "checkpoints": [
                     {
@@ -374,6 +405,35 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
                         "summary": "verified local result",
                         "received_at": "2026-01-01T00:01:00Z",
                     }
+                ],
+                "handoffs": [
+                    {
+                        "handoff_id": "handoff-finished",
+                        "participant_id": "agent-finished",
+                        "session_id": "session-finished",
+                        "outcome": "ADVANCE",
+                        "status": "queued_for_review",
+                        "summary": "completed evidence-linked route",
+                        "received_at": "2026-01-01T00:01:30Z",
+                    },
+                    {
+                        "handoff_id": "handoff-older",
+                        "participant_id": "agent-1",
+                        "session_id": "session-1",
+                        "outcome": "NEGATIVE",
+                        "status": "queued_for_review",
+                        "summary": "older signed falsifier",
+                        "received_at": "2025-12-31T23:59:00Z",
+                    },
+                    {
+                        "handoff_id": "handoff-name-clash",
+                        "participant_id": "agent-finished",
+                        "session_id": "session-finished-other",
+                        "outcome": "NO_SIGNAL",
+                        "status": "queued_for_review",
+                        "summary": "distinct controller using the same public display name",
+                        "received_at": "2026-01-01T00:01:45Z",
+                    },
                 ],
                 "feedback": [
                     {
@@ -411,6 +471,56 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
             "status": "active",
         }
     ]
+    assert live["case-live-001"]["agents_on_record"] == [
+        {
+            "participant_id": "agent-1",
+            "identity_id": "controller-key-sha256:" + digest_bytes(b"controller-key-one"),
+            "active": True,
+            "work_status": "active",
+            "session_count": 1,
+            "handoff_count": 1,
+            "latest_outcome": "NEGATIVE",
+            "latest_handoff_id": "handoff-older",
+            "latest_at": "2025-12-31T23:59:00Z",
+            "review_status": "queued_for_review",
+        },
+        {
+            "participant_id": "agent-finished",
+            "identity_id": "controller-key-sha256:" + digest_bytes(b"controller-key-other"),
+            "active": False,
+            "work_status": None,
+            "session_count": 1,
+            "handoff_count": 1,
+            "latest_outcome": "NO_SIGNAL",
+            "latest_handoff_id": "handoff-name-clash",
+            "latest_at": "2026-01-01T00:01:45Z",
+            "review_status": "queued_for_review",
+        },
+        {
+            "participant_id": "agent-finished",
+            "identity_id": "controller-key-sha256:" + digest_bytes(b"controller-key-finished"),
+            "active": False,
+            "work_status": None,
+            "session_count": 1,
+            "handoff_count": 1,
+            "latest_outcome": "ADVANCE",
+            "latest_handoff_id": "handoff-finished",
+            "latest_at": "2026-01-01T00:01:30Z",
+            "review_status": "queued_for_review",
+        },
+        {
+            "participant_id": "agent-stale",
+            "identity_id": "controller-key-sha256:" + digest_bytes(b"controller-key-stale"),
+            "active": False,
+            "work_status": "stale",
+            "session_count": 1,
+            "handoff_count": 0,
+            "latest_outcome": None,
+            "latest_handoff_id": None,
+            "latest_at": None,
+            "review_status": None,
+        },
+    ]
     assert live["case-live-001"]["recent_activity"][0]["summary"] == "needs one more lemma"
     assert live["case-live-001"]["recent_activity"][0]["kind"] == "review_feedback"
     assert live["case-live-001"]["external_status_trust"] == {
@@ -419,6 +529,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
     }
     assert live["case-live-001"]["status_source"] == "case_clerk_projection"
     assert live["case-live-002"]["live_stale"] is True
+    assert live["case-live-002"]["agents_on_record"] == []
     assert live["case-live-002"]["live_error"] == "case clerk unavailable or unverifiable"
 
 

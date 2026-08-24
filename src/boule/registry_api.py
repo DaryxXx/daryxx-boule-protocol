@@ -16,7 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from .canonical import canonical_bytes
+from .canonical import canonical_bytes, digest_bytes
 from .case_anchor_store import CaseAnchorStore
 from .errors import ProtocolError
 from .model import CASE_ID_RE, parse_time
@@ -279,6 +279,129 @@ def _activity(state: dict[str, Any]) -> list[dict[str, Any]]:
     return result[:40]
 
 
+def _agents_on_record(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project controller-bound display names with open claims or signed handoffs."""
+    sessions = state.get("sessions")
+    sessions_by_id: dict[str, dict[str, Any]] = {}
+    if isinstance(sessions, list):
+        sessions_by_id = {
+            item["session_id"]: item
+            for item in sessions
+            if isinstance(item, dict) and isinstance(item.get("session_id"), str)
+        }
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def identity_for(participant_id: str, session_id: str) -> str:
+        session = sessions_by_id.get(session_id)
+        if isinstance(session, dict) and session.get("participant_id") != participant_id:
+            session = None
+        controller_key = session.get("controller_key") if isinstance(session, dict) else None
+        if isinstance(controller_key, str) and controller_key:
+            return f"controller-key-sha256:{digest_bytes(controller_key.encode())}"
+        return f"session-sha256:{digest_bytes(session_id.encode())}"
+
+    def ensure(participant_id: str, session_id: str) -> dict[str, Any]:
+        identity_id = identity_for(participant_id, session_id)
+        key = (participant_id, identity_id)
+        return records.setdefault(
+            key,
+            {
+                "participant_id": participant_id,
+                "identity_id": identity_id,
+                "active": False,
+                "work_status": None,
+                "session_count": 0,
+                "handoff_count": 0,
+                "latest_outcome": None,
+                "latest_handoff_id": None,
+                "latest_at": None,
+                "review_status": None,
+                "_session_ids": set(),
+                "_latest_key": (float("-inf"), ""),
+            },
+        )
+
+    claims = state.get("claims")
+    claim_status_by_session: dict[str, str] = {}
+    if isinstance(claims, list):
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            session_id = claim.get("session_id")
+            status = claim.get("status")
+            if not isinstance(session_id, str) or status not in {"active", "stale"}:
+                continue
+            if status == "active" or session_id not in claim_status_by_session:
+                claim_status_by_session[session_id] = status
+
+    for session_id, work_status in claim_status_by_session.items():
+        session = sessions_by_id.get(session_id)
+        participant_id = session.get("participant_id") if isinstance(session, dict) else None
+        if not isinstance(participant_id, str) or not participant_id:
+            continue
+        record = ensure(participant_id, session_id)
+        record["_session_ids"].add(session_id)
+        if work_status == "active" or record["work_status"] is None:
+            record["work_status"] = work_status
+        record["active"] = record["work_status"] == "active"
+
+    handoffs = state.get("handoffs")
+    if isinstance(handoffs, list):
+        for handoff in handoffs:
+            if not isinstance(handoff, dict):
+                continue
+            participant_id = handoff.get("participant_id")
+            session_id = handoff.get("session_id")
+            if (
+                not isinstance(participant_id, str)
+                or not participant_id
+                or not isinstance(session_id, str)
+                or not session_id
+            ):
+                continue
+            record = ensure(participant_id, session_id)
+            record["_session_ids"].add(session_id)
+            record["handoff_count"] += 1
+            received_at = handoff.get("received_at")
+            try:
+                timestamp = parse_time(received_at, "handoff time").timestamp()
+            except ProtocolError:
+                timestamp = float("-inf")
+            handoff_id = handoff.get("handoff_id")
+            identifier = handoff_id if isinstance(handoff_id, str) else ""
+            latest_key = (timestamp, identifier)
+            if latest_key >= record["_latest_key"]:
+                record["_latest_key"] = latest_key
+                record["latest_outcome"] = (
+                    handoff.get("outcome") if isinstance(handoff.get("outcome"), str) else None
+                )
+                record["latest_handoff_id"] = identifier or None
+                record["latest_at"] = received_at if isinstance(received_at, str) else None
+                status = handoff.get("status")
+                record["review_status"] = status if isinstance(status, str) else None
+
+    ordered = sorted(
+        records.values(),
+        key=lambda item: (
+            not item["active"],
+            -item["_latest_key"][0],
+            item["participant_id"].casefold(),
+            item["identity_id"],
+        ),
+    )
+    result = []
+    for record in ordered:
+        record["session_count"] = len(record["_session_ids"])
+        result.append(
+            {
+                key: value
+                for key, value in record.items()
+                if key not in {"_latest_key", "_session_ids"}
+            }
+        )
+    return result
+
+
 def project_case(record: dict[str, Any], bundle: dict[str, Any]) -> dict[str, Any]:
     state = bundle["state"]
     snapshot = bundle["snapshot"]
@@ -287,7 +410,7 @@ def project_case(record: dict[str, Any], bundle: dict[str, Any]) -> dict[str, An
     active_session_ids = {
         item.get("session_id")
         for item in claims
-        if isinstance(item, dict) and item.get("status") in {"active", "stale"}
+        if isinstance(item, dict) and item.get("status") == "active"
     }
     active_agents = [
         {
@@ -327,6 +450,7 @@ def project_case(record: dict[str, Any], bundle: dict[str, Any]) -> dict[str, An
         "registry_status": record["status"],
         "status": state.get("problem_status", record["status"]),
         "active_agents": active_agents,
+        "agents_on_record": _agents_on_record(state),
         "active_claims": active_claims,
         "recent_activity": _activity(state),
         "external_status_trust": external_trust,
@@ -387,6 +511,7 @@ class LiveProjector:
         return {
             **record,
             "active_agents": [],
+            "agents_on_record": [],
             "active_claims": [],
             "recent_activity": [],
             "external_status_trust": {
