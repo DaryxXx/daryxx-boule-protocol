@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
+from pathlib import Path
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -20,6 +22,46 @@ SIGNATURE_PREFIX = "ed25519sig:"
 
 def generate_private_key() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.generate()
+
+
+def write_private_key(path: str | Path, key: Ed25519PrivateKey) -> Path:
+    """Persist a local session key without ever returning or printing its bytes."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        destination.parent.chmod(0o700)
+    except OSError as exc:
+        raise ProtocolError(f"cannot protect private-key directory: {destination.parent}") from exc
+    raw = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        descriptor = os.open(destination, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileExistsError as exc:
+        raise ProtocolError(f"private key already exists: {destination}") from exc
+    return destination
+
+
+def load_private_key(path: str | Path) -> Ed25519PrivateKey:
+    source = Path(path)
+    try:
+        if source.stat().st_mode & 0o077:
+            raise ProtocolError(f"private key permissions must be 0600: {source}")
+        value = serialization.load_pem_private_key(source.read_bytes(), password=None)
+    except ProtocolError:
+        raise
+    except (OSError, ValueError, TypeError) as exc:
+        raise ProtocolError(f"cannot load private key: {source}") from exc
+    if not isinstance(value, Ed25519PrivateKey):
+        raise ProtocolError("private key is not Ed25519")
+    return value
 
 
 def _encode(raw: bytes) -> str:

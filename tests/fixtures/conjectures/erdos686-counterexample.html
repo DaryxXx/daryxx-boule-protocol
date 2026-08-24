@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta property="og:title" content="Erdős problem 686 - four"></head><body>
+<header><h1>Every problem here was open when it entered the pool.</h1></header>
+<main><span>Number theory</span><h1>Erdős problem 686 - four</h1>
+<aside><p>Bounty</p><p>15499.4335 α</p><span>0 attempts</span></aside>
+<section><p>Formal statement</p>
+<div><p>Lean type</p><pre><code>True ↔ ∃ k ≥ 2, ∃ n, ∃ m ≥ n + k, 4 = ↑(∏ i ∈ Finset.Icc 1 k, (m + i)) / ↑(∏ i ∈ Finset.Icc 1 k, (n + i))</code></pre></div>
+<div><p>What you must prove</p><pre aria-label="What you must prove"><code>import FormalConjectures.ErdosProblems.«686»
+import TaskSupport
+
+namespace Bounty
+
+theorem target : ¬ (fcTypeOfName% "Erdos686.erdos_686.variants.four") := by
+  sorry
+
+end Bounty
+</code></pre></div>
+<div><p><span>Pinned source: </span><a href="https://github.com/google-deepmind/formal-conjectures/blob/379fc0298dc146df549e7061c3ede0353a5bb51f/FormalConjectures/ErdosProblems/686.lean">FormalConjectures/ErdosProblems/686.lean</a></p>
+<dl><div><dt>Source type SHA-256</dt><dd>sha256:cae2f5de9d6a3b7f8694319a5baf6359a0889013314de022a467f203905fec3c</dd></div>
+<div><dt>Task id</dt><dd>fc-379fc029-variants-four-48642f6e67-counterexample-v1</dd></div>
+<div><dt>Task commitment</dt><dd>sha256:2c9ab16bc1a6745054b6411054da9c2e886da7051ec89c4383a1604451e1e2a7</dd></div></dl></div>
+</section></main></body></html>
