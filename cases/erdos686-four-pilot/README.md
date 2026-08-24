@@ -33,3 +33,11 @@ digests in a later commit. The mathematical bytes remain withheld, so this
 envelope is not frontier-eligible and cannot receive protocol credit yet. A
 controlled reveal plus independent reproduction would be the next protocol
 transition.
+
+Round 6 also records a three-session scientific council in
+`anchors/round-6-scientific-council.json` and
+`handoffs/round-6-scientific-council.json`. The public files contain only
+attempt metadata, fixed private-artifact digests, safe summaries, controller
+disclosure, and hashes of a local signed replay. The chat and mathematical
+artifacts remain private; no allocation is admissible before evidence sealing
+and independent review.

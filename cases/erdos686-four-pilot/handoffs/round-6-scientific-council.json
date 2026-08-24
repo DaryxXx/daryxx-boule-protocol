@@ -1,0 +1,58 @@
+{
+  "admission_status": "PENDING_CONTROLLED_REVEAL",
+  "anchor_commit": "4cfe4dd94e60b223258a4470bbf80b3ffad7e8b3",
+  "case_id": "erdos686-four-pilot",
+  "claim_ceiling": "Hash-only private research handoffs. They establish neither a proof of Erdős 686, global originality, independent human control, causal prize shares, nor submission authority.",
+  "completed_at": "2026-08-24T12:42:52.086770+00:00",
+  "controller_disclosure": "All three Codex Ultra sessions were operated under one Daryxx-controlled research run; separate sessions are not independent reviewers or people.",
+  "credit_status": "NOT_ADJUDICATED",
+  "frontier_eligible": false,
+  "handoffs": [
+    {
+      "artifact_disclosure": "WITHHELD",
+      "artifact_sha256": "a82d4b2ed10142d97b6489002df5d8e01b4696a1b6aa0e05529453f26f8b1a9b",
+      "attempt_id": "a-aef6f54cb490",
+      "limitations": "Paper-level analysis only; not Lean-verified, externally peer-reviewed, or target-solving.",
+      "outcome": "ADVANCE",
+      "owner": "codex-sol-ultra-even-k-scientist",
+      "safe_summary": "A uniform even-case necessary condition was strictly strengthened and survived cross-critique; the remaining closure mechanism is open."
+    },
+    {
+      "artifact_disclosure": "WITHHELD",
+      "artifact_sha256": "9310ce42b3f38344fa5f9d835df7bb9e55bae89eddc7fb043d1ecdce2b9f7376",
+      "attempt_id": "a-0d84aca09c45",
+      "limitations": "A distinct conditional reduction was derived, but its decisive rank and completeness prerequisites are unknown.",
+      "outcome": "ADVANCE",
+      "owner": "codex-sol-ultra-k5-descent-scientist",
+      "safe_summary": "A k=5 route avoiding the closed computation was reduced to one bounded falsifier, without claiming that its positive gate holds."
+    },
+    {
+      "artifact_disclosure": "WITHHELD",
+      "artifact_sha256": "f4d6aac506fcff13db7858f4d56a6b8c3b6b5bce65e784b8adc71d0e382aad13",
+      "attempt_id": "a-d879cde57f1f",
+      "depends_on_attempts": [
+        "a-aef6f54cb490",
+        "a-0d84aca09c45"
+      ],
+      "limitations": "Adversarial route selection only; no mathematical result, credit split, or reviewer independence is implied.",
+      "outcome": "ADVANCE",
+      "owner": "codex-sol-ultra-scientific-chair",
+      "safe_summary": "The chair retained both bounded advances, promoted neither as a solution, and selected exactly one capped continuation."
+    }
+  ],
+  "local_signed_replay": {
+    "accepted_handoffs": 3,
+    "chat_jsonl_sha256": "eff1cc3ffddc7bbe84277383db9a37784f79ccfc4bb71b303456931fe3c9576c",
+    "ledger_jsonl_sha256": "5f251e7f94e28d6f7d8d57fee28f611f73be6abd5bdc836abe7570e2dc2cc74a",
+    "messages": 7,
+    "phase": "active",
+    "simulation": true,
+    "summary_json_sha256": "40126a6530b126e7d4cf65805be271b59f28a2ba89306c330a96181c807b2790"
+  },
+  "next_test": "A fresh precommitted session receives only the fixed handoff and runs the chair-selected bounded falsifier; it must return ADVANCE, NEGATIVE, BLOCKED, or NO_SIGNAL.",
+  "originality": "UNREVIEWED",
+  "protocol": "boule-council-handoff-envelope/0.1",
+  "published_after_anchor": true,
+  "schema_version": 1,
+  "submission_authorized": false
+}
