@@ -15,7 +15,12 @@ from boule.cli import main
 from boule.crypto import generate_private_key, public_key_text
 from boule.errors import ProtocolError
 from boule.registry import Registry, verify_registry_snapshot
-from boule.registry_api import LiveProjector, build_server, fetch_case_state
+from boule.registry_api import (
+    LiveProjector,
+    build_server,
+    fetch_case_state,
+    maintainer_runtime_status,
+)
 from boule.remote_protocol import build_chain_proof, build_snapshot
 from boule.trust_store import trust_registry_snapshot
 
@@ -174,6 +179,82 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
             script = response.read().decode("utf-8")
         assert "raw.received_at" in script
         assert "clerk-observed" in script
+        assert "Maintainer Running" in page
+        assert "Open Boule on GitHub" in page
+        assert "MAINTAINER_URL" in script
+
+
+def test_registry_api_reports_fresh_and_stale_maintainer_heartbeat(tmp_path) -> None:
+    registry = Registry.create(tmp_path / "registry.jsonl", generate_private_key())
+    control = tmp_path / ".boule"
+    control.mkdir()
+    watcher = control / "watcher.json"
+    watcher.write_text(
+        json.dumps(
+            {
+                "pid": 99,
+                "cycle": 12,
+                "last_tick_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "interval_seconds": 30,
+                "automatic_admission": True,
+                "automatic_provisioning": False,
+                "error_cases": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with running_registry(registry) as origin:
+        status, value, headers = request(origin + "/v1/maintainer")
+        assert status == 200
+        assert headers["Cache-Control"] == "no-store"
+        runtime = value["maintainer"]
+        assert runtime["status"] == "running"
+        assert runtime["basis"] == "unsigned_local_watcher_heartbeat"
+        assert runtime["cycle"] == 12
+        assert runtime["automatic_admission"] is True
+        assert runtime["automatic_provisioning"] is False
+        assert runtime["error_case_count"] == 0
+        assert "pid" not in runtime
+
+        watcher.write_text(
+            json.dumps(
+                {
+                    "cycle": 13,
+                    "last_tick_at": "2020-01-01T00:00:00Z",
+                    "interval_seconds": 30,
+                    "error_cases": ["case-one"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        status, value, _headers = request(origin + "/v1/maintainer")
+        assert status == 200
+        assert value["maintainer"]["status"] == "stale"
+        assert value["maintainer"]["error_case_count"] == 1
+
+
+def test_maintainer_heartbeat_bounds_untrusted_interval_and_exact_freshness(tmp_path) -> None:
+    watcher = tmp_path / "watcher.json"
+    heartbeat = {
+        "cycle": 1,
+        "last_tick_at": "2030-01-01T00:00:00Z",
+        "interval_seconds": 30,
+    }
+    watcher.write_text(json.dumps(heartbeat), encoding="utf-8")
+    boundary = datetime.fromisoformat("2030-01-01T00:01:30+00:00")
+    assert maintainer_runtime_status(watcher, observed_at=boundary)["status"] == "running"
+    after_boundary = datetime.fromisoformat("2030-01-01T00:01:31+00:00")
+    assert maintainer_runtime_status(watcher, observed_at=after_boundary)["status"] == "stale"
+
+    heartbeat["interval_seconds"] = 1e308
+    watcher.write_text(json.dumps(heartbeat), encoding="utf-8")
+    bounded = maintainer_runtime_status(watcher, observed_at=boundary)
+    assert bounded["status"] == "running"
+    assert bounded["fresh_for_seconds"] == 120
+
+    watcher.write_bytes(b"{" + b" " * (64 * 1024) + b"}")
+    assert maintainer_runtime_status(watcher, observed_at=boundary)["status"] == "unknown"
 
 
 def test_registry_cli_persists_and_enforces_tofu_pin(tmp_path, capsys) -> None:

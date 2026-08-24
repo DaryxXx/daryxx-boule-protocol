@@ -70,6 +70,49 @@ def claim(problem, session, capsys, route="route-x"):
     return json.loads(capsys.readouterr().out)["claim_id"]
 
 
+def test_agent_can_choose_public_name(monkeypatch, tmp_path, capsys):
+    problem = initialize(monkeypatch, tmp_path, capsys)
+    assert (
+        main(
+            [
+                "agent",
+                "start",
+                str(problem),
+                "--name",
+                "Daryxx1",
+                "--controller",
+                "daryxx-common-control",
+                "--label",
+                "Erdos 686 session",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    started = json.loads(capsys.readouterr().out)
+    assert started["participant_id"] == "Daryxx1"
+    assert main(["history", str(problem), "--json"]) == 0
+    history = json.loads(capsys.readouterr().out)
+    assert history["sessions"][0]["participant_id"] == "Daryxx1"
+
+    assert (
+        main(
+            [
+                "maintainer",
+                "watch",
+                str(problem),
+                "--cycles",
+                "1",
+                "--interval",
+                "nan",
+                "--json",
+            ]
+        )
+        == 2
+    )
+    assert "watch interval must be between 0 and 300 seconds" in capsys.readouterr().err
+
+
 def publish_solution(problem, session, capsys, handoff_id="h-proof"):
     solution = problem / "Solution.lean"
     solution.write_text("example : True := by trivial\n", encoding="utf-8")

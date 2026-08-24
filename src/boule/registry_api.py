@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -29,18 +30,98 @@ from .remote_protocol import (
 
 MAX_PATH_BYTES = 2_048
 MAX_CASE_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_WATCHER_STATUS_BYTES = 64 * 1024
 MAX_SNAPSHOT_AGE = timedelta(minutes=5)
 MAX_SNAPSHOT_FUTURE_SKEW = timedelta(minutes=1)
+DEFAULT_WATCHER_STALE_SECONDS = 120
+MAX_WATCH_INTERVAL_SECONDS = 300
 WEB_ROOT = Path(__file__).with_name("web")
 STATIC_FILES = {
     (): ("index.html", "text/html; charset=utf-8"),
     ("index.html",): ("index.html", "text/html; charset=utf-8"),
     ("styles.css",): ("styles.css", "text/css; charset=utf-8"),
     ("app.js",): ("app.js", "text/javascript; charset=utf-8"),
+    ("favicon.svg",): ("favicon.svg", "image/svg+xml"),
+    ("docs.html",): ("docs.html", "text/html; charset=utf-8"),
+    ("llms.txt",): ("llms.txt", "text/plain; charset=utf-8"),
 }
 
 CaseFetcher = Callable[[dict[str, Any]], dict[str, Any]]
 CaseCheckpoint = Callable[[int, str | None], None]
+
+
+def maintainer_runtime_status(
+    path: Path | None, *, observed_at: datetime | None = None
+) -> dict[str, Any]:
+    """Project one local watcher heartbeat without treating it as signed protocol state."""
+    now = observed_at or datetime.now(UTC)
+    base: dict[str, Any] = {
+        "schema": "boule-maintainer-runtime/0.1",
+        "status": "unknown",
+        "basis": "unsigned_local_watcher_heartbeat",
+        "observed_at": now.isoformat().replace("+00:00", "Z"),
+        "last_tick_at": None,
+        "heartbeat_age_seconds": None,
+        "fresh_for_seconds": None,
+        "cycle": None,
+        "automatic_admission": None,
+        "automatic_provisioning": None,
+        "error_case_count": None,
+    }
+    if path is None:
+        return base
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return base
+    if len(raw) > MAX_WATCHER_STATUS_BYTES:
+        return base
+    try:
+        value = strict_json_bytes(raw)
+        if not isinstance(value, dict):
+            return base
+        last_tick_at = value.get("last_tick_at")
+        heartbeat = parse_time(last_tick_at, "maintainer watcher heartbeat")
+    except ProtocolError:
+        return base
+    interval = value.get("interval_seconds")
+    if (
+        isinstance(interval, bool)
+        or not isinstance(interval, (int, float))
+        or not math.isfinite(interval)
+        or not 0 <= interval <= MAX_WATCH_INTERVAL_SECONDS
+    ):
+        interval = None
+    fresh_for = (
+        max(15, min(900, int(interval * 3)))
+        if interval is not None
+        else DEFAULT_WATCHER_STALE_SECONDS
+    )
+    age = (now - heartbeat).total_seconds()
+    if age < -MAX_SNAPSHOT_FUTURE_SKEW.total_seconds():
+        return base
+    errors = value.get("error_cases")
+    error_count = len(errors) if isinstance(errors, list) else None
+    cycle = value.get("cycle")
+    if isinstance(cycle, bool) or not isinstance(cycle, int) or cycle < 1:
+        cycle = None
+    automatic_admission = value.get("automatic_admission")
+    if not isinstance(automatic_admission, bool):
+        automatic_admission = None
+    automatic_provisioning = value.get("automatic_provisioning")
+    if not isinstance(automatic_provisioning, bool):
+        automatic_provisioning = None
+    return {
+        **base,
+        "status": "running" if age <= fresh_for else "stale",
+        "last_tick_at": last_tick_at,
+        "heartbeat_age_seconds": max(0, int(age)),
+        "fresh_for_seconds": fresh_for,
+        "cycle": cycle,
+        "automatic_admission": automatic_admission,
+        "automatic_provisioning": automatic_provisioning,
+        "error_case_count": error_count,
+    }
 
 
 def _fetch_json(endpoint: str, timeout: float, maximum: int) -> Any:
@@ -499,6 +580,7 @@ class RegistryHTTPServer(ThreadingHTTPServer):
         *,
         live_projector: LiveProjector | None = None,
         anchor_store_path: Path | None = None,
+        maintainer_status_path: Path | None = None,
         web_root: Path = WEB_ROOT,
         max_workers: int = 32,
         request_timeout: float = 10.0,
@@ -514,6 +596,9 @@ class RegistryHTTPServer(ThreadingHTTPServer):
             )
             live_projector = LiveProjector(anchor_store=anchor_store)
         self.live_projector = live_projector
+        if maintainer_status_path is None and registry.path is not None:
+            maintainer_status_path = registry.path.parent / ".boule" / "watcher.json"
+        self.maintainer_status_path = maintainer_status_path
         self.web_root = web_root
         self.request_timeout = request_timeout
         self._worker_slots = threading.BoundedSemaphore(max_workers)
@@ -577,7 +662,9 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         if static:
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "default-src 'self'; script-src 'self'; "
+                "style-src 'self' https://fonts.googleapis.com; "
+                "font-src 'self' https://fonts.gstatic.com; "
                 "connect-src 'self'; img-src 'self' data:; object-src 'none'; "
                 "base-uri 'none'; frame-ancestors 'none'",
             )
@@ -665,6 +752,11 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                         lambda: self.server.live_projector.problems(self.server.registry)
                     ),
                 )
+            elif parts == ("v1", "maintainer"):
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"maintainer": maintainer_runtime_status(self.server.maintainer_status_path)},
+                )
             elif len(parts) == 4 and parts[:2] == ("v1", "chain"):
                 try:
                     from_count = int(parts[2])
@@ -715,6 +807,7 @@ def build_server(
     *,
     live_projector: LiveProjector | None = None,
     anchor_store_path: Path | None = None,
+    maintainer_status_path: Path | None = None,
     web_root: Path = WEB_ROOT,
     max_workers: int = 32,
     request_timeout: float = 10.0,
@@ -725,6 +818,7 @@ def build_server(
         registry,
         live_projector=live_projector,
         anchor_store_path=anchor_store_path,
+        maintainer_status_path=maintainer_status_path,
         web_root=web_root,
         max_workers=max_workers,
         request_timeout=request_timeout,

@@ -155,7 +155,7 @@ claim one bounded route, preserve a checkpoint, coordinate, and leave a handoff:
 
 ```bash
 uv run boule agent start problems/erdos686-erdos-686-variants-four \
-  --participant alice --controller daryxx --label "Codex session A"
+  --name alice --controller daryxx --label "Codex session A"
 uv run boule brief problems/erdos686-erdos-686-variants-four
 uv run boule agent claim problems/erdos686-erdos-686-variants-four \
   --session SESSION_ID --route "close k=5 curve" \
@@ -247,7 +247,7 @@ participant commands at that clerk:
 export BOULE_SERVER=http://127.0.0.1:8787
 uv run boule status PROBLEM
 uv run boule agent start PROBLEM \
-  --participant alice --controller alice --label "Codex session A"
+  --name alice --controller alice --label "Codex session A"
 uv run boule agent claim PROBLEM --session SESSION_ID \
   --route "close k=5 curve" --success-gate "complete certificate" \
   --falsifier "admissible integral point"

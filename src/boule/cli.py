@@ -231,7 +231,7 @@ def _init_problem(args: argparse.Namespace) -> int:
             "task_commitment": result.manifest["task"]["task_commitment"],
             "snapshot_created": result.snapshot_created,
             "disclosure": Workspace(result.path).policy["disclosure"],
-            "next": f"boule agent start {result.path} --participant NAME --controller CONTROLLER",
+            "next": f"boule agent start {result.path} --name NAME --controller CONTROLLER",
         },
         args.json,
     )
@@ -872,8 +872,10 @@ def _write_watcher_status(workspace: Workspace, value: dict[str, Any]) -> None:
 
 
 def _maintainer_watch(args: argparse.Namespace) -> int:
-    if args.cycles < 0 or args.interval < 0:
-        raise ProtocolError("watch cycles and interval must be non-negative")
+    if args.cycles < 0:
+        raise ProtocolError("watch cycles must be non-negative")
+    if not math.isfinite(args.interval) or not 0 <= args.interval <= 300:
+        raise ProtocolError("watch interval must be between 0 and 300 seconds")
     if args.cycles == 0 and args.interval < 5:
         raise ProtocolError("continuous watch interval must be at least 5 seconds")
     workspace = _workspace(args)
@@ -1106,8 +1108,10 @@ def _registry_tick(args: argparse.Namespace) -> int:
 
 
 def _registry_watch(args: argparse.Namespace) -> int:
-    if args.cycles < 0 or args.interval < 0:
-        raise ProtocolError("watch cycles and interval must be non-negative")
+    if args.cycles < 0:
+        raise ProtocolError("watch cycles must be non-negative")
+    if not math.isfinite(args.interval) or not 0 <= args.interval <= 300:
+        raise ProtocolError("watch interval must be between 0 and 300 seconds")
     if args.cycles == 0 and args.interval < 5:
         raise ProtocolError("continuous watch interval must be at least 5 seconds")
     hub = Hub(args.registry)
@@ -1151,6 +1155,7 @@ def _registry_watch(args: argparse.Namespace) -> int:
                     "pid": os.getpid(),
                     "cycle": cycle,
                     "last_tick_at": _now(),
+                    "interval_seconds": args.interval,
                     "registry_head": tick["registry_head"],
                     "status_counts": tick["status_counts"],
                     "error_cases": sorted(errors),
@@ -1574,7 +1579,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = agent_commands.add_parser("start", help="create and delegate a local session key")
     start.add_argument("problem", help="initialized problem directory")
-    start.add_argument("--participant", required=True, help="stable participant id")
+    start.add_argument(
+        "--participant",
+        "--name",
+        dest="participant",
+        required=True,
+        help="chosen stable public agent name",
+    )
     start.add_argument("--controller", required=True, help="self-declared common controller id")
     start.add_argument("--label", help="optional descriptive session label")
     start.add_argument("--hours", type=float, default=24.0, help="session lifetime")

@@ -7,6 +7,7 @@
   "use strict";
 
   var LIVE_URL = "/v1/live";
+  var MAINTAINER_URL = "/v1/maintainer";
   var REFRESH_MS = 30000;
   var MAX_TIMELINE = 20;
   var MAX_GRAPH_NODES = 30;
@@ -32,7 +33,15 @@
     pulseAgents: document.getElementById("pulse-agents"),
     pulseClaims: document.getElementById("pulse-claims"),
     pulseEvents: document.getElementById("pulse-events"),
-    pulseMeta: document.getElementById("pulse-meta")
+    pulseMeta: document.getElementById("pulse-meta"),
+    maintainerButton: document.getElementById("maintainer-status"),
+    maintainerText: document.getElementById("maintainer-status-text"),
+    maintainerDialog: document.getElementById("maintainer-dialog"),
+    maintainerModalState: document.getElementById("maintainer-modal-state"),
+    maintainerLastTick: document.getElementById("maintainer-last-tick"),
+    maintainerCycle: document.getElementById("maintainer-cycle"),
+    maintainerAutomation: document.getElementById("maintainer-automation"),
+    maintainerErrors: document.getElementById("maintainer-errors")
   };
 
   var lastGoodAt = null;
@@ -249,6 +258,22 @@
       (coll.staleCount ? ", " + coll.staleCount + " stale" : ""));
   }
 
+  function renderAgents(cell, coll) {
+    renderCount(cell, coll, "active agents");
+    if (!Array.isArray(coll.items)) return;
+    var names = [];
+    coll.items.forEach(function (item) {
+      if (!isObject(item)) return;
+      var name = asString(item.participant_id) || asString(item.label);
+      if (name && names.indexOf(name) < 0) names.push(name);
+    });
+    if (!names.length) return;
+    var visible = names.slice(0, 4);
+    var suffix = names.length > visible.length ? " +" + (names.length - visible.length) : "";
+    cell.appendChild(el("span", "agent-names", visible.join(", ") + suffix));
+    cell.setAttribute("aria-label", coll.count + " active agents: " + names.join(", "));
+  }
+
   function renderProblems(problems) {
     clear(els.problemsBody);
 
@@ -318,7 +343,7 @@
       row.appendChild(cStatus);
 
       var cAgents = td("Agents", "mono-cell");
-      renderCount(cAgents, normalizeCollection(p.active_agents), "active agents");
+      renderAgents(cAgents, normalizeCollection(p.active_agents));
       row.appendChild(cAgents);
 
       var cClaims = td("Claims", "mono-cell");
@@ -635,6 +660,7 @@
   function load() {
     if (inFlight) return;
     inFlight = true;
+    loadMaintainer();
     fetch(LIVE_URL, { headers: { Accept: "application/json" }, cache: "no-store" })
       .then(function (res) {
         if (!res.ok) throw new Error("HTTP " + res.status);
@@ -651,6 +677,73 @@
       .then(function () {
         inFlight = false;
       });
+  }
+
+  /* ---------- maintainer runtime ---------- */
+
+  function automationText(value) {
+    if (!isObject(value)) return "not published";
+    var admission = value.automatic_admission;
+    var provisioning = value.automatic_provisioning;
+    if (typeof admission !== "boolean" && typeof provisioning !== "boolean") {
+      return "not published";
+    }
+    return "admission " + (admission === true ? "on" : admission === false ? "off" : "unknown") +
+      " · provisioning " + (provisioning === true ? "on" : provisioning === false ? "off" : "unknown");
+  }
+
+  function renderMaintainer(value) {
+    var status = isObject(value) ? asString(value.status) : null;
+    status = status ? status.toLowerCase() : "unknown";
+    if (["running", "stale", "unknown"].indexOf(status) < 0) status = "unknown";
+    els.maintainerButton.className = "maintainer-status maintainer-" + status;
+    els.maintainerText.textContent = status === "running" ? "Maintainer Running" :
+      status === "stale" ? "Maintainer Stale" : "Maintainer Unknown";
+
+    var lastTick = isObject(value) ? parseIso(asString(value.last_tick_at)) : null;
+    var age = isObject(value) && typeof value.heartbeat_age_seconds === "number" ?
+      Math.max(0, Math.floor(value.heartbeat_age_seconds)) : null;
+    els.maintainerLastTick.textContent = lastTick ? fmtAbs(lastTick) + " · " + fmtRel(lastTick) : "not published";
+    els.maintainerCycle.textContent = isObject(value) && typeof value.cycle === "number" ?
+      String(value.cycle) : "not published";
+    els.maintainerAutomation.textContent = automationText(value);
+    els.maintainerErrors.textContent = isObject(value) && typeof value.error_case_count === "number" ?
+      String(value.error_case_count) : "not published";
+    els.maintainerModalState.className = "dialog-runtime runtime-" + status;
+    if (status === "running") {
+      els.maintainerModalState.textContent = "Fresh watcher heartbeat" +
+        (age !== null ? " observed " + age + " seconds ago." : ".");
+    } else if (status === "stale") {
+      els.maintainerModalState.textContent = "The last watcher heartbeat is stale. Administrative automation may be paused.";
+    } else {
+      els.maintainerModalState.textContent = "No valid watcher heartbeat is currently available from this origin.";
+    }
+  }
+
+  function loadMaintainer() {
+    fetch(MAINTAINER_URL, { headers: { Accept: "application/json" }, cache: "no-store" })
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (payload) {
+        renderMaintainer(isObject(payload) ? payload.maintainer : null);
+      })
+      .catch(function () { renderMaintainer(null); });
+  }
+
+  function wireMaintainerDialog() {
+    if (!els.maintainerButton || !els.maintainerDialog) return;
+    els.maintainerButton.addEventListener("click", function () {
+      if (typeof els.maintainerDialog.showModal === "function") {
+        els.maintainerDialog.showModal();
+      } else {
+        els.maintainerDialog.setAttribute("open", "");
+      }
+    });
+    els.maintainerDialog.addEventListener("click", function (event) {
+      if (event.target === els.maintainerDialog) els.maintainerDialog.close();
+    });
   }
 
   /* ---------- copy buttons ---------- */
@@ -681,6 +774,7 @@
 
   /* ---------- init ---------- */
 
+  wireMaintainerDialog();
   els.refreshButton.addEventListener("click", load);
   wireCopyButtons();
   load();
