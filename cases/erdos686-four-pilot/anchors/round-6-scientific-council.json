@@ -1,0 +1,40 @@
+{
+  "case_id": "erdos686-four-pilot",
+  "claim_ceiling": "This public commit anchors three private attempt records after their local start; it does not prove earlier priority, mathematical correctness, human independence, causal value, or prize entitlement.",
+  "controller_disclosure": "Three separate Daryxx-controlled Codex Ultra sessions. Separate sessions do not prove separate human control or reviewer independence.",
+  "disclosure": "ATTEMPT_METADATA_ONLY",
+  "participants": [
+    {
+      "attempt_fingerprint": "64163dc8f92a6a35f44d919508625f3e7bf6738a47b33f7afff240e2568e7d1f",
+      "attempt_id": "a-aef6f54cb490",
+      "expected_artifact": "withheld-private-even-k-council-report",
+      "owner": "codex-sol-ultra-even-k-scientist",
+      "precommit_record_sha256": "fca649c446df5b8f2ea6d7055258dd8a50958d1f4147c94e0ad3811f3d0edbca",
+      "started_at": "2026-08-24T12:23:58.256878+00:00"
+    },
+    {
+      "attempt_fingerprint": "5642be9e2391d4545331e96c1bcd285f989c0d6d6f80b3f5032b4c47b8d0efaf",
+      "attempt_id": "a-0d84aca09c45",
+      "expected_artifact": "withheld-private-k5-council-report",
+      "owner": "codex-sol-ultra-k5-descent-scientist",
+      "precommit_record_sha256": "af780df99c9228b8d7aa9f876c1647123557dd51182d92274959aaf72ee6fed5",
+      "started_at": "2026-08-24T12:23:58.316595+00:00"
+    },
+    {
+      "attempt_fingerprint": "9d792ab3c8284e2049b2c7d2962783ca2c110b5f271ea8d2668ce24d8c41e391",
+      "attempt_id": "a-d879cde57f1f",
+      "expected_artifact": "withheld-private-chair-assessment",
+      "owner": "codex-sol-ultra-scientific-chair",
+      "precommit_record_sha256": "c5ccd12221b4cb6da159dc0e80757e92862e2e54a12000e0e3ed29dab346fa4f",
+      "started_at": "2026-08-24T12:23:58.375608+00:00"
+    }
+  ],
+  "protocol": "boule-route-anchor/0.1",
+  "public_anchor_prepared_at": "2026-08-24T12:31:22Z",
+  "recorded_after_work_started": true,
+  "route_id": "route-erdos686-round6-scientific-council",
+  "schema_version": 1,
+  "status": "CLAIMED_PRIVATE_WORK",
+  "success_gate": "A later commit may disclose only fixed artifact digests, explicit dependencies, limitations, cross-critique disposition, and the chair outcome; messages alone are not contribution evidence.",
+  "target_challenge_sha256": "686216faac87187b5512b62027137145ad3ccd3bf311fec91cfdb12d01df15bb"
+}

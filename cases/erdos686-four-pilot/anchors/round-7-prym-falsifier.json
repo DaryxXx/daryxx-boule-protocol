@@ -1,0 +1,35 @@
+{
+  "attempt_fingerprint": "cddc73e201780f692ea72e3258a42b9725c8bf84ba273480646d4bef753c8b5f",
+  "attempt_id": "a-ec5f6f9fc2a2",
+  "case_id": "erdos686-four-pilot",
+  "claim_ceiling": "This public commit records a private attempt only after its work and result already existed. It does not establish pre-work public priority, reveal the result, prove correctness or originality, show independent human control, or create prize entitlement.",
+  "controller_disclosure": "One fresh Daryxx-controlled Codex Ultra session resumed from the fixed round-6 handoff. Session separation does not prove a separate human or independent reviewer.",
+  "disclosure": "RETROSPECTIVE_ATTEMPT_METADATA_ONLY",
+  "expected_handoff": {
+    "artifact_path": "withheld-until-controlled-reveal",
+    "outcomes": [
+      "ADVANCE",
+      "NEGATIVE",
+      "BLOCKED",
+      "NO_SIGNAL"
+    ],
+    "required_fields": [
+      "artifact_sha256",
+      "depends_on",
+      "limitations",
+      "next_test",
+      "reproduce"
+    ]
+  },
+  "inflight_record_sha256": "25be676389bf312228f83818e18eae9b9851ef0029082c9bb8eb598cf9f81e31",
+  "owner": "codex-sol-ultra-prym-falsifier",
+  "precommit_started_at": "2026-08-24T12:44:27.909893+00:00",
+  "protocol": "boule-route-anchor/0.1",
+  "public_anchor_prepared_at": "2026-08-24T12:55:22Z",
+  "recorded_after_result_existed": true,
+  "route_id": "route-r7-k5-prym-root-grid-falsifier",
+  "schema_version": 1,
+  "scope": "Execute the round-6 chair's fixed, capped falsifier from a mechanical handoff without relying on private chat history.",
+  "status": "COMPLETED_PRIVATE_WORK_RETROSPECTIVELY_ANCHORED",
+  "target_challenge_sha256": "686216faac87187b5512b62027137145ad3ccd3bf311fec91cfdb12d01df15bb"
+}

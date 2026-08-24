@@ -574,6 +574,47 @@ def test_credit_is_ballot_based_not_node_count() -> None:
     assert after["allocation_bps"]["agent_a"] == 2_500
 
 
+def test_scientific_chat_is_signed_coordination_not_credit_evidence() -> None:
+    state = build_community_demo().session.state
+
+    assert len(state.messages) == 7
+    assert list(state.messages) == [
+        "message-a-1",
+        "message-b-proposal",
+        "message-a-critique",
+        "message-b-response",
+        "message-c-chair-question",
+        "message-b-chair-answer",
+        "message-c-verdict",
+    ]
+    assert [
+        message["received_at"] for message in state.messages.values()
+    ] == sorted(message["received_at"] for message in state.messages.values())
+    assert {
+        message["payload"]["topic"] for message in state.messages.values()
+    } == {
+        "chair-answer",
+        "chair-question",
+        "chair-verdict",
+        "critique",
+        "intake",
+        "proposal",
+        "response",
+    }
+    ballot_refs = {
+        reference
+        for ballot in state.ballots.values()
+        for references in ballot["evidence_refs"].values()
+        for reference in references
+    }
+    assert ballot_refs == {
+        "handoff-a-intake",
+        "handoff-b-even",
+        "handoff-c-integration",
+    }
+    assert not ballot_refs.intersection(state.messages)
+
+
 def test_tampered_community_ledger_is_rejected() -> None:
     entries = deepcopy(list(build_community_demo().session.ledger.entries))
     entries[3]["event"]["payload"]["question"] = "retrospectively rewritten"
@@ -602,6 +643,21 @@ def test_cli_writes_replayable_artifacts_and_enforces_terminal_gate(tmp_path, ca
     prompt = (output / "agent-prompt.md").read_text(encoding="utf-8")
     assert "one short-lived Boule Community mock session" in prompt
     assert "do not submit, spend, transfer value" in prompt
+    chat = [
+        json.loads(line)
+        for line in (output / "chat.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [message["message_id"] for message in chat] == [
+        "message-a-1",
+        "message-b-proposal",
+        "message-a-critique",
+        "message-b-response",
+        "message-c-chair-question",
+        "message-b-chair-answer",
+        "message-c-verdict",
+    ]
+    assert chat[1]["participant_id"] == "agent_b"
+    assert chat[1]["received_at"] == "2030-01-01T00:10:20Z"
 
     assert main(["community-agent-prompt", str(output / "ledger.jsonl")]) == 0
     assert "Open obligations: none" in capsys.readouterr().out

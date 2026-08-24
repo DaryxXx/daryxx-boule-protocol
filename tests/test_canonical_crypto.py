@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 
 from boule.canonical import canonical_bytes, digest_object
-from boule.crypto import generate_private_key, public_key_text, sign_object, verify_object
+from boule.crypto import (
+    generate_private_key,
+    load_private_key,
+    public_key_text,
+    sign_object,
+    verify_object,
+    write_private_key,
+)
 from boule.errors import ProtocolError
 
 
@@ -33,3 +40,16 @@ def test_signature_binds_the_complete_object() -> None:
             {"case_id": "case-001", "allocation_bps": {"a": 4000, "b": 6000}},
             signature,
         )
+
+
+def test_private_key_file_round_trip_and_permissions(tmp_path) -> None:
+    key = generate_private_key()
+    path = write_private_key(tmp_path / "private" / "session.pem", key)
+
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert public_key_text(load_private_key(path)) == public_key_text(key)
+
+    path.chmod(0o644)
+    with pytest.raises(ProtocolError, match="permissions"):
+        load_private_key(path)

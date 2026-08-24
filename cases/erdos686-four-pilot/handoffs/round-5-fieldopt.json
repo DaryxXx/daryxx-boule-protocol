@@ -1,0 +1,42 @@
+{
+  "admission_status": "PENDING_CONTROLLED_REVEAL",
+  "artifact": {
+    "disclosure": "WITHHELD",
+    "report_sha256": "6b606d7fe384aaed1a11cf141c002dc1a45ca37f3f466ee0254923b64439285b",
+    "selected_evidence_sha256": "41af86504f0cdc4b2927d6e39199115371595c3b890e79ba44f93bc085ae0963"
+  },
+  "attempt_id": "a-85ffdaa82d90",
+  "case_id": "erdos686-four-pilot",
+  "claim_id": "claim-a-85ffdaa82d90",
+  "claim_ceiling": "Private evidence handoff metadata only; no proof, k=5 completion, global Erdős 686 solution, submission, or bounty entitlement.",
+  "completed_at": "2026-08-24T12:02:49.120169+00:00",
+  "depends_on": [
+    {
+      "artifact_sha256": "d3ae45df5bcf0a3862e5674301ecfb3f78c0c1ea4d69afc3f3586d3ace4a7150",
+      "evidence_id": "a-99485d3930de"
+    }
+  ],
+  "evidence_classification": "PARTIAL_ADVANCE_AND_ROUTE_KILL",
+  "frontier_eligible": false,
+  "limitations": [
+    "The artifact bytes and complete computation scripts are not public.",
+    "One diagnostics-only response capture was lost and supports no claim.",
+    "The retained evidence contains selected exact result lines and timeout boundaries, not complete raw XML.",
+    "No Mordell-Weil rank or finite-index certificate was returned."
+  ],
+  "next_test": "Use the preserved smaller exact model in an authorized longer-lived Magma process and require MW_DONE, success=true, and rank below 15 before elliptic Chabauty.",
+  "originality": "Exact application and verification of documented optimization machinery; no claim of an original theorem.",
+  "outcome": "BLOCKED",
+  "owner": "codex-sol-ultra-fieldopt",
+  "protocol": "boule-handoff-envelope/0.1",
+  "reproduce": "Unavailable publicly until a controlled reveal supplies the artifact and exact environment.",
+  "route_id": "route-k5-zero-cover-fieldopt-r5",
+  "schema_version": 1,
+  "summary": "An exact isomorphic representation materially reduces the arithmetic model and preserves the zero-cover map, but two bounded Mordell-Weil computations still terminate before a certificate.",
+  "uses": [
+    {
+      "artifact_sha256": "15fb9bd7e7ec949864663052f256b9259658d6d3deaed06e0c02e09da02a4f77",
+      "evidence_id": "a-99485d3930de-raw-magma"
+    }
+  ]
+}

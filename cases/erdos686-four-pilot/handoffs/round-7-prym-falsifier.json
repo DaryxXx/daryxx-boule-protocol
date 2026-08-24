@@ -1,0 +1,59 @@
+{
+  "admission_status": "PENDING_CONTROLLED_REVEAL",
+  "anchor_commit": "f832bdd7243dcd4ef2052fd0ba506f4718933250",
+  "artifact": {
+    "compatibility_check_output_sha256": "bcafcaca71c379fd0b4adda29c4f710624a21b70280ea2b064ea8c32364f329d",
+    "compatibility_check_source_sha256": "312bd11001a92472dd9a07af1b807431dc6875469b4c2b04adaf7ed766e2bf88",
+    "disclosure": "WITHHELD",
+    "good_reduction_output_sha256": "7dd9bfcb36c8e37cd308a9e9f483fdcc4c023d3e77fe9bded8c081ac23be32e6",
+    "good_reduction_source_sha256": "7a92ca4d2401938036acab0cfc35781d218c1f7e65b3c4e32d85e8f88007cea5",
+    "report_sha256": "4b06cad52db9f24032966a68ea85475cc4690f5dd6080290fb233131e2138967",
+    "request_1_input_sha256": "e2a86f256e477a26b73478ff9a44ddc0e14c41b3421c9ef7f27235af01b77da7",
+    "request_1_receipt_sha256": "7efc4d5b547775eeee625597193297333c0c133f226a6db6f2606465fc778b0f",
+    "request_2_input_sha256": "674458758c6f2c6278af83289e86529285c6715f6c3d11e46caf77dae4161b1d",
+    "request_2_receipt_sha256": "8ed6bcb3ab4c9423b0e5e9f74cc75f5e54a75963280a34c6b6613c2a2219a6b3"
+  },
+  "attempt_id": "a-ec5f6f9fc2a2",
+  "case_id": "erdos686-four-pilot",
+  "claim_ceiling": "Hash-only private negative research handoff. It does not reveal a proof, decide k=5 or Erdős 686, establish global originality or independent human control, assign causal prize shares, or authorize a submission.",
+  "completed_at": "2026-08-24T12:56:18.975528+00:00",
+  "context_pack_sha256": "12527d03073c31626f6a1ade47cb2ee57c78b1c2d93e4520085e8a5a6cf2b56d",
+  "controller_disclosure": "The successor was a fresh Daryxx-controlled Codex Ultra session. This tests cold continuation, not independent human review.",
+  "credit_status": "NOT_ADJUDICATED",
+  "depends_on": [
+    {
+      "artifact_sha256": "9310ce42b3f38344fa5f9d835df7bb9e55bae89eddc7fb043d1ecdce2b9f7376",
+      "attempt_id": "a-0d84aca09c45",
+      "role": "proposal"
+    },
+    {
+      "artifact_sha256": "f4d6aac506fcff13db7858f4d56a6b8c3b6b5bce65e784b8adc71d0e382aad13",
+      "attempt_id": "a-d879cde57f1f",
+      "role": "chair_selected_test"
+    }
+  ],
+  "evidence_classification": "CERTIFIED_ROUTE_FALSIFICATION",
+  "external_compute": {
+    "authorized_requests": 3,
+    "paid_requests": 0,
+    "used_requests": 2
+  },
+  "frontier_eligible": false,
+  "limitations": [
+    "The artifact bytes, mathematical construction, exact outputs, and reproduction commands are not public.",
+    "The public anchor was committed after the private result existed and cannot establish earlier public priority.",
+    "The result falsifies one bounded route only; it is not a target-level result.",
+    "The computation is exact and locally audited but is not Lean-verified or externally peer-reviewed."
+  ],
+  "next_test": "Resume only with a genuinely distinct theorem-level route to complete the relevant rational-point classification, authorized longer-lived exact arithmetic for the existing complete descent, or a target witness.",
+  "originality": "UNREVIEWED",
+  "outcome": "NEGATIVE",
+  "owner": "codex-sol-ultra-prym-falsifier",
+  "protocol": "boule-handoff-envelope/0.1",
+  "reproduce": "Unavailable publicly until a controlled reveal supplies the fixed artifact set and exact environment.",
+  "route_id": "route-r7-k5-prym-root-grid-falsifier",
+  "safe_summary": "A fresh successor executed the chair-selected bounded falsifier from the fixed handoff, rejected the route's required positive gate, and stopped at the precommitted boundary.",
+  "schema_version": 1,
+  "submission_authorized": false,
+  "target_challenge_sha256": "686216faac87187b5512b62027137145ad3ccd3bf311fec91cfdb12d01df15bb"
+}

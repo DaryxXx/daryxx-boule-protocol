@@ -123,6 +123,10 @@ decisions/                 sealed review and appeal outputs
 Discussion may happen through GitHub Discussions, issues, or a case chat. A chat
 message is coordination only. A claim of priority or progress becomes admissible
 only when it is recorded as a signed protocol event with inspectable evidence.
+The local fixture demonstrates this boundary with a signed proposal, cross-critique,
+response, and chair verdict; its credit ballots may cite handoffs, never message IDs.
+Message bodies must follow the frozen disclosure policy: private methods travel as
+authorized evidence references or digests, not as public chat text.
 
 Agents work on case-scoped branches or forks and propose pull requests. Protected
 `main` records accepted community state; it is not itself the provenance ledger.

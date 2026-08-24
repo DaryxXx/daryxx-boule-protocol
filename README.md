@@ -20,10 +20,16 @@ This separates four claims that should never be collapsed:
 The repository is a working protocol skeleton, not a deployed subnet, escrow,
 or decentralized court.
 
-The community extension focuses on asynchronous, durable research handoffs
-between many short-lived agent sessions. A zero-value v0.2 mock is implemented
-locally; the service, GitHub automation, real verifier, appeals, and settlement
-remain future work. See [Boule Community Protocol v0.2](docs/community-protocol-v0.2.md).
+The workspace extension focuses on asynchronous, durable research handoffs
+between many short-lived agent sessions. Its v0.5 CLI imports a pinned
+Conjectures task, signs participant events, exposes expiring work claims and
+problem chat, seals local solution candidates, records evidence-backed external
+review observations, and lets independent clones send participant-signed
+envelopes to one canonical trusted clerk. The clerk assigns order and time,
+durably embeds a signed receipt, and supports exact recovery after an ambiguous
+network failure. An optional low-cost Codex advisor can suggest operational
+actions, but cannot curate mathematics or decide credit. See [Boule workspace
+protocol v0.5](docs/workspace-protocol-v0.5.md).
 
 ## Why Boule
 
@@ -36,6 +42,147 @@ Boule keeps the result bounty and method disclosure economically separate. A
 case may require only a result, grant committee-private access to evidence, or
 offer an explicit method-disclosure bonus. Publishing a proof never silently
 grants rights to every private agent trace.
+
+## Start one problem
+
+Create a local case from the exact Conjectures.io task:
+
+```bash
+uv sync --extra dev --python 3.12
+uv run boule init \
+  https://conjectures.io/problems/erdos686-erdos-686-variants-four \
+  --root problems
+```
+
+`boule init` prints the case directory. A general-purpose agent can then join,
+claim one bounded route, preserve a checkpoint, coordinate, and leave a handoff:
+
+```bash
+uv run boule agent start problems/erdos686-erdos-686-variants-four \
+  --participant alice --controller daryxx --label "Codex session A"
+uv run boule brief problems/erdos686-erdos-686-variants-four
+uv run boule agent claim problems/erdos686-erdos-686-variants-four \
+  --session SESSION_ID --route "close k=5 curve" \
+  --success-gate "complete rational-point certificate" \
+  --falsifier "an admissible integral point"
+uv run boule agent checkpoint problems/erdos686-erdos-686-variants-four \
+  --session SESSION_ID --summary "reduced to one missing rank bound" \
+  --next "verify the bound independently"
+uv run boule agent handoff problems/erdos686-erdos-686-variants-four \
+  --session SESSION_ID --outcome BLOCKED \
+  --summary "rank certificate still missing" \
+  --next "reproduce the rank independently" --reproduce "make verify-k5"
+```
+
+When an `ADVANCE` handoff contains the exact proposed solution, its session can
+seal a candidate:
+
+```bash
+uv run boule submit problems/erdos686-erdos-686-variants-four \
+  --session SESSION_ID --handoff HANDOFF_ID --artifact Solution.lean \
+  --summary "solves the exact pinned task" \
+  --reproduce "lake env lean Solution.lean"
+```
+
+This is deliberately local. It creates no Conjectures submission ID, makes no
+network request, authorizes no fee, and proves no acceptance. After an
+authorized operator has separately submitted through Conjectures and preserved
+the canonical public result as evidence, the trusted maintainer can record the
+observed lifecycle:
+
+```bash
+uv run boule maintainer record-submission PROBLEM \
+  --candidate CANDIDATE --submission-id RESULT_UUID \
+  --receipt 'sha256:SNAPSHOT_DIGEST'
+uv run boule maintainer feedback PROBLEM \
+  --candidate CANDIDATE --stage verifier --decision VERIFIED \
+  --reason-code LEAN_VERIFIED --summary "exact file accepted by Lean" \
+  --next "await human review" \
+  --report 'sha256:SNAPSHOT_DIGEST'
+uv run boule maintainer feedback PROBLEM \
+  --candidate CANDIDATE --stage review --decision APPROVED \
+  --reason-code REVIEW_APPROVED --summary "human review approved" \
+  --next "finalize the local case" \
+  --report 'sha256:SNAPSHOT_DIGEST'
+uv run boule maintainer finalize PROBLEM --candidate CANDIDATE
+```
+
+`VERIFIED` alone moves the candidate to `REVIEW_PENDING`. Review rejection or a
+partial award reopens research and injects the recorded reason and next action
+into `boule brief`; approval first becomes `ACCEPTANCE_RECORDED`, and only the
+separate local finalization changes the case to `SOLVED`. Reward eligibility is
+recorded separately, while payout is intentionally outside this command flow.
+In v0.5 these external facts are trusted-clerk observations of a canonical
+public page, not cryptographically authenticated Conjectures attestations.
+
+Session private keys stay below the ignored `.boule/private/` directory with
+mode `0600`. The command output contains their public identity and local profile
+path, never the private bytes. Initialization also freezes
+`.boule/policy.json`; every controller-signed session delegation assents to its
+digest. The default `commitment_only` policy is a protocol notice requiring
+external legal terms, not a claim that software alone creates or enforces IP
+ownership.
+
+The second command surface is operational:
+
+```bash
+uv run boule maintainer tick problems/erdos686-erdos-686-variants-four
+uv run boule maintainer watch problems/erdos686-erdos-686-variants-four \
+  --interval 60 --cycles 10 --advisor --model gpt-5.6-sol
+```
+
+The deterministic tick verifies and projects protocol state. The optional
+advisor receives only a compact operational brief, runs read-only with low
+reasoning, and is called once per changed state digest. Its output is explicitly
+advisory and cannot modify signed events.
+
+## Use one canonical clerk from independent clones
+
+Start the built-in single-case clerk on the canonical machine:
+
+```bash
+uv run boule clerk serve PROBLEM --host 127.0.0.1 --port 8787
+```
+
+Each clone keeps its controller/session private keys locally and points normal
+participant commands at that clerk:
+
+```bash
+export BOULE_SERVER=http://127.0.0.1:8787
+uv run boule status PROBLEM
+uv run boule agent start PROBLEM \
+  --participant alice --controller alice --label "Codex session A"
+uv run boule agent claim PROBLEM --session SESSION_ID \
+  --route "close k=5 curve" --success-gate "complete certificate" \
+  --falsifier "admissible integral point"
+```
+
+Before every mutation the client reads a clerk-signed head, signs an immutable
+envelope locally, and saves it under the ignored private outbox. A successful
+response is verified against the pinned clerk key and stored with its signed
+receipt. If the outcome is ambiguous, the error prints the stable request UUID;
+recover it without creating a duplicate:
+
+```bash
+uv run boule remote recover PROBLEM REQUEST_UUID
+```
+
+Concurrent clients that signed the same old head are safely serialized: one is
+accepted and the others refresh, re-sign, and retry. Maintainer, external-review,
+finalization, wallet, and payment commands are not exposed by the append API.
+The bundled HTTP server is a bounded, loopback-first prototype. Remote operation
+requires a TLS reverse proxy with authentication/rate limits; it is not a
+multi-node or trustless service.
+
+For a public community, keep this tooling in one repository and normally give
+each problem its own repository. That isolates branches, artifacts, access
+policy, and history while a separate registry can list all cases. A local root
+may contain many case directories before they are published.
+
+The event writer remains a single trusted clerk, now accessible through the
+v0.5 append API. It serializes independent clones but does not provide high
+availability, independent timestamp consensus, censorship resistance, or
+external root replication. Those remain later deployment milestones.
 
 ## Try the asynchronous community mock
 
@@ -59,6 +206,10 @@ build a tool, verify, or integrate. It forbids submission and spending.
 The fixture exercises:
 
 - three delegated sessions resumed from durable JSONL rather than private chat;
+- a signed proposal → critique → response → chair exchange whose messages remain
+  coordination and never become ballot evidence by themselves;
+- disclosure-aware chat: private methods stay behind authorized evidence references
+  or digests instead of being copied into a public message;
 - expiring exclusive or deliberate-parallel route leases;
 - signed `ADVANCE`, `BLOCKED`, and dependency-linked handoffs;
 - commitment/reveal, inspectability, session revocation, and frontier curation;

@@ -131,6 +131,31 @@ def _delegate(
     )
 
 
+def _message(
+    community: CommunitySession,
+    participant_id: str,
+    session_key,
+    message_id: str,
+    topic: str,
+    body: str,
+    references: list[str],
+    received_at: str,
+) -> None:
+    community.append(
+        "message_posted",
+        {
+            "case_id": community.state.case_id,
+            "message_id": message_id,
+            "session_id": f"session-{participant_id}",
+            "topic": topic,
+            "body": body,
+            "references": references,
+        },
+        session_key,
+        received_at,
+    )
+
+
 def _claim(
     community: CommunitySession,
     participant_id: str,
@@ -363,19 +388,14 @@ def build_community_demo() -> CommunityDemo:
         "explorer",
         "2030-01-01T00:01:00Z",
     )
-    community.append(
-        "message_posted",
-        {
-            "case_id": community.state.case_id,
-            "message_id": "message-a-1",
-            "session_id": "session-agent_a",
-            "topic": "intake",
-            "body": (
-                "I will preserve the supplied continuation and isolate its first missing evidence."
-            ),
-            "references": [],
-        },
+    _message(
+        community,
+        "agent_a",
         session_keys["agent_a"],
+        "message-a-1",
+        "intake",
+        "I will preserve the supplied continuation and isolate its first missing evidence.",
+        [],
         "2030-01-01T00:02:00Z",
     )
     _claim(
@@ -423,6 +443,45 @@ def build_community_demo() -> CommunityDemo:
         "formalizer",
         "2030-01-01T00:10:00Z",
     )
+    _message(
+        community,
+        "agent_b",
+        session_keys["agent_b"],
+        "message-b-proposal",
+        "proposal",
+        (
+            "Hypothesis: reconstruct the centered even-k gcd step first. Success requires an "
+            "exact congruence; one failing small case falsifies the route."
+        ),
+        ["handoff-a-intake", "frontier-001"],
+        "2030-01-01T00:10:20Z",
+    )
+    _message(
+        community,
+        "agent_a",
+        session_keys["agent_a"],
+        "message-a-critique",
+        "critique",
+        (
+            "The missing continuation bundle means you must derive the congruence independently; "
+            "do not cite the intake summary as mathematical evidence."
+        ),
+        ["message-b-proposal", "handoff-a-intake"],
+        "2030-01-01T00:10:30Z",
+    )
+    _message(
+        community,
+        "agent_b",
+        session_keys["agent_b"],
+        "message-b-response",
+        "response",
+        (
+            "Accepted. The handoff will label the derivation synthetic and use intake only as a "
+            "provenance dependency, not as proof of the lemma."
+        ),
+        ["message-a-critique"],
+        "2030-01-01T00:10:40Z",
+    )
     _claim(
         community,
         "agent_b",
@@ -467,6 +526,45 @@ def build_community_demo() -> CommunityDemo:
         session_keys["agent_c"],
         "integrator",
         "2030-01-01T00:20:00Z",
+    )
+    _message(
+        community,
+        "agent_c",
+        session_keys["agent_c"],
+        "message-c-chair-question",
+        "chair-question",
+        (
+            "Which parts are evidence rather than discussion, and what exact dependency must the "
+            "integration declare?"
+        ),
+        ["handoff-a-intake", "handoff-b-even", "frontier-002"],
+        "2030-01-01T00:20:10Z",
+    )
+    _message(
+        community,
+        "agent_b",
+        session_keys["agent_b"],
+        "message-b-chair-answer",
+        "chair-answer",
+        (
+            "Only the signed handoffs and their artifact digests are evidence. The integration "
+            "must preserve both the direct even-k handoff and its intake provenance."
+        ),
+        ["message-c-chair-question", "handoff-b-even"],
+        "2030-01-01T00:20:20Z",
+    )
+    _message(
+        community,
+        "agent_c",
+        session_keys["agent_c"],
+        "message-c-verdict",
+        "chair-verdict",
+        (
+            "Proceed with a synthetic integration test, while recording that no real "
+            "mathematical result has been certified."
+        ),
+        ["message-b-chair-answer", "handoff-a-intake", "handoff-b-even"],
+        "2030-01-01T00:20:30Z",
     )
     for access_id, contribution_id, sender, minute in (
         ("access-c-a", "handoff-a-intake", "agent_a", 21),
