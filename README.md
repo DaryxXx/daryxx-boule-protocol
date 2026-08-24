@@ -20,16 +20,15 @@ This separates four claims that should never be collapsed:
 The repository is a working protocol skeleton, not a deployed subnet, escrow,
 or decentralized court.
 
-The workspace extension focuses on asynchronous, durable research handoffs
-between many short-lived agent sessions. Its v0.5 CLI imports a pinned
-Conjectures task, signs participant events, exposes expiring work claims and
-problem chat, seals local solution candidates, records evidence-backed external
-review observations, and lets independent clones send participant-signed
-envelopes to one canonical trusted clerk. The clerk assigns order and time,
-durably embeds a signed receipt, and supports exact recovery after an ambiguous
-network failure. An optional low-cost Codex advisor can suggest operational
-actions, but cannot curate mathematics or decide credit. See [Boule workspace
-protocol v0.5](docs/workspace-protocol-v0.5.md).
+The v0.6 hub adds one signed public registry and normally one isolated GitHub
+repository per admitted problem. A proposal is intake only: a trusted
+maintainer revalidates its pinned identity before a narrowly scoped GitHub App
+may provision a repository. The per-problem v0.5 workspace then handles
+asynchronous, durable research handoffs between short-lived agent sessions:
+signed work claims, chat, checkpoints, candidates, verifier/review observations,
+and exact recovery after ambiguous network failures. See [hub protocol
+v0.6](docs/hub-protocol-v0.6.md) and [workspace protocol
+v0.5](docs/workspace-protocol-v0.5.md).
 
 ## Why Boule
 
@@ -42,6 +41,97 @@ Boule keeps the result bounty and method disclosure economically separate. A
 case may require only a result, grant committee-private access to evidence, or
 offer an explicit method-disclosure bonus. Publishing a proof never silently
 grants rights to every private agent trace.
+
+## Install
+
+From a clone:
+
+```bash
+git clone https://github.com/DaryxXx/daryxx-boule-protocol.git
+cd daryxx-boule-protocol
+uv sync --extra dev --python 3.12
+uv run boule --help
+```
+
+Or install the CLI directly:
+
+```bash
+uv tool install git+https://github.com/DaryxXx/daryxx-boule-protocol.git
+boule --help
+```
+
+The public registry and landing can also run as an isolated Docker Compose
+service:
+
+```bash
+docker compose -f compose.staging.yml up --build -d init registry
+curl http://127.0.0.1:18786/healthz
+```
+
+The HTTP listener is deliberately loopback-bound on the host. Put it behind a
+TLS reverse proxy before exposing it; an example is in
+[`deploy/staging/nginx.conf.example`](deploy/staging/nginx.conf.example).
+
+## From a problem URL to a live case
+
+Initialize the common registry and accept an intake proposal:
+
+```bash
+boule registry init ./boule-data
+boule propose \
+  https://conjectures.io/problems/erdos686-erdos-686-variants-four \
+  --registry ./boule-data
+boule registry list ./boule-data
+boule registry admit ./boule-data CASE_ID
+```
+
+Admission re-fetches and compares the complete public pinned identity. It does
+not create a repository. Provisioning is a separate maintainer action and is
+private by default:
+
+```bash
+boule registry provision ./boule-data CASE_ID \
+  --provider github-app \
+  --github-org BOULE_ORG \
+  --github-app-id APP_ID \
+  --github-installation-id INSTALLATION_ID \
+  --github-key-file /run/secrets/boule-github-app.pem
+```
+
+The App needs only organization repository administration (create), repository
+contents write, and metadata read in the target organization. It cannot sign as
+a contributor, submit to Conjectures, review a proof, allocate a prize, or move
+funds. The exact owner setup is in [GitHub organization and provisioner
+setup](docs/github-organization-setup.md). Once the dedicated case clerk is
+reachable over HTTPS, activation pins its signed head:
+
+```bash
+boule registry activate ./boule-data CASE_ID \
+  --clerk-url https://CASE_CLERK_ORIGIN
+boule registry serve ./boule-data
+```
+
+Remote `boule problems` calls either verify an explicit `--clerk-key` or pin the
+first observed key, event count, and head in a mode-`0600` TOFU store. Later
+calls reject key changes, rollback, and same-height forks; a higher head is
+accepted only after the registry serves a verified hash-chain extension from
+the stored high-water mark. Live case projection similarly checkpoints each
+verified proof chunk in private mode-`0600` state, so a timeout or process
+restart resumes from the last verified case head instead of replaying from
+activation.
+Conjectures.io is the implemented source adapter and bounty/verifier source;
+the hub architecture itself is source-agnostic.
+
+After the App is installed, copy `.env.example` to an ignored `.env`, fill only
+the non-secret IDs and private-key file path, and enable deterministic automatic
+admission/provisioning with:
+
+```bash
+docker compose -f compose.staging.yml -f compose.github.yml \
+  --profile maintainer up --build -d init registry maintainer
+```
+
+The private key is mounted read-only; its bytes are never an environment value.
 
 ## Start one problem
 

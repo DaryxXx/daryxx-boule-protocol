@@ -183,9 +183,7 @@ def parse_problem_html(
         raise ProtocolError(f"expected exactly one og:title, found {len(title_meta)}")
     title = title_meta[0]
     h1_titles = [
-        _normalize_text(node.text())
-        for node in root.descendants("h1")
-        if node.text().strip()
+        _normalize_text(node.text()) for node in root.descendants("h1") if node.text().strip()
     ]
     if h1_titles.count(title) != 1:
         raise ProtocolError("exactly one h1 must corroborate og:title")

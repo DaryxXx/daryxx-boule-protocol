@@ -1,0 +1,74 @@
+services:
+  init:
+    build: .
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        if [ ! -f /data/registry.jsonl ]; then
+          boule registry init /data --json;
+        fi;
+        chown -R 10001:10001 /data
+    volumes:
+      - boule-data:/data
+    restart: "no"
+
+  registry:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    command:
+      - registry
+      - serve
+      - /data
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8786"
+      - --allow-insecure-bind
+      - --json
+    volumes:
+      - boule-data:/data
+    ports:
+      - "127.0.0.1:18786:8786"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8786/healthz', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  maintainer:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    command:
+      - registry
+      - watch
+      - /data
+      - --cycles
+      - "0"
+      - --interval
+      - "30"
+      - --json
+    volumes:
+      - boule-data:/data
+    profiles: ["maintainer"]
+
+  cli:
+    build: .
+    entrypoint: ["boule"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    command: ["registry", "list", "/data", "--json"]
+    volumes:
+      - boule-data:/data
+    profiles: ["tools"]
+
+volumes:
+  boule-data:

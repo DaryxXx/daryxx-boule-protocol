@@ -1,0 +1,24 @@
+services:
+  maintainer:
+    command:
+      - registry
+      - watch
+      - /data
+      - --cycles
+      - "0"
+      - --interval
+      - "30"
+      - --auto-admit
+      - --auto-provision
+      - --provider
+      - github-app
+      - --visibility
+      - private
+      - --json
+    environment:
+      BOULE_GITHUB_ORG: ${BOULE_GITHUB_ORG:?set BOULE_GITHUB_ORG}
+      BOULE_GITHUB_APP_ID: ${BOULE_GITHUB_APP_ID:?set BOULE_GITHUB_APP_ID}
+      BOULE_GITHUB_INSTALLATION_ID: ${BOULE_GITHUB_INSTALLATION_ID:?set BOULE_GITHUB_INSTALLATION_ID}
+      BOULE_GITHUB_APP_KEY_FILE: /run/secrets/boule-github-app.pem
+    volumes:
+      - ${BOULE_GITHUB_APP_KEY_HOST_PATH:?set BOULE_GITHUB_APP_KEY_HOST_PATH}:/run/secrets/boule-github-app.pem:ro

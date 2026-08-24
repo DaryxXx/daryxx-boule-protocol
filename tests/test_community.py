@@ -587,12 +587,10 @@ def test_scientific_chat_is_signed_coordination_not_credit_evidence() -> None:
         "message-b-chair-answer",
         "message-c-verdict",
     ]
-    assert [
+    assert [message["received_at"] for message in state.messages.values()] == sorted(
         message["received_at"] for message in state.messages.values()
-    ] == sorted(message["received_at"] for message in state.messages.values())
-    assert {
-        message["payload"]["topic"] for message in state.messages.values()
-    } == {
+    )
+    assert {message["payload"]["topic"] for message in state.messages.values()} == {
         "chair-answer",
         "chair-question",
         "chair-verdict",

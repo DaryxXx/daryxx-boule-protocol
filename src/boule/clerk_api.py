@@ -170,6 +170,19 @@ class ClerkRequestHandler(BaseHTTPRequestHandler):
                     ),
                 )
                 return
+            if len(parts) == 4 and parts[:2] == ["v1", "chain"]:
+                try:
+                    from_count = int(parts[2])
+                    to_count = int(parts[3])
+                except ValueError as exc:
+                    raise ProtocolError("chain proof counts must be integers") from exc
+                self._send(
+                    HTTPStatus.OK,
+                    self.server.workspace.remote_chain_proof(
+                        from_count, to_count, self.server.maintainer_private_key
+                    ),
+                )
+                return
             if len(parts) == 3 and parts[:2] == ["v1", "receipts"]:
                 request_id = _request_id(parts[2])
                 receipt = self.server.workspace.remote_receipt(

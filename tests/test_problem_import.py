@@ -33,9 +33,7 @@ def test_imports_current_formalized_task_and_is_idempotent(tmp_path: Path) -> No
     assert manifest["task"]["task_commitment"] == (
         "sha256:bd2f52489d971db4ae4a8c79e106c7fd3080827a8d4dc72f3154e395da098528"
     )
-    assert manifest["task"]["formal_repository_pin"] == (
-        "379fc0298dc146df549e7061c3ede0353a5bb51f"
-    )
+    assert manifest["task"]["formal_repository_pin"] == ("379fc0298dc146df549e7061c3ede0353a5bb51f")
     assert len(list((first.path / "snapshots").iterdir())) == 1
 
 
@@ -58,9 +56,7 @@ def test_title_comes_from_unique_og_title_and_is_corroborated(tmp_path: Path) ->
             fetcher=lambda _: FetchResponse(missing_meta, BASE),
         )
 
-    mismatched = body.replace(
-        b"Erd\xc5\x91s problem 686 - four\"></head>", b"Wrong title\"></head>"
-    )
+    mismatched = body.replace(b'Erd\xc5\x91s problem 686 - four"></head>', b'Wrong title"></head>')
     with pytest.raises(ProtocolError, match="corroborate"):
         import_problem(
             BASE,
@@ -95,9 +91,7 @@ def test_dynamic_page_change_does_not_change_identity(tmp_path: Path) -> None:
     first = import_problem(BASE, tmp_path, fetcher=fetch, now=lambda: NOW)
     stable = (first.path / "problem.json").read_bytes()
     later = datetime(2026, 8, 25, tzinfo=UTC)
-    second = import_problem(
-        BASE, tmp_path, fetcher=fetch, refresh_snapshot=True, now=lambda: later
-    )
+    second = import_problem(BASE, tmp_path, fetcher=fetch, refresh_snapshot=True, now=lambda: later)
 
     assert second.created is False and second.snapshot_created is True
     assert (first.path / "problem.json").read_bytes() == stable

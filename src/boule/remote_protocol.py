@@ -15,6 +15,8 @@ ENVELOPE_SCHEMA = "boule-workspace-envelope/0.5"
 EVENT_SCHEMA = "boule-workspace-event/0.5"
 RECEIPT_SCHEMA = "boule-workspace-clerk-receipt/0.5"
 SNAPSHOT_SCHEMA = "boule-workspace-clerk-snapshot/0.5"
+CHAIN_PROOF_SCHEMA = "boule-workspace-chain-proof/0.6"
+MAX_CHAIN_PROOF_LINKS = 256
 
 ENVELOPE_FIELDS = {
     "schema",
@@ -317,3 +319,114 @@ def verify_snapshot(
         raise ProtocolError("remote clerk snapshot state digest mismatch")
     verify_object(clerk_key, snapshot_unsigned(snapshot), snapshot["signature"])
     return snapshot
+
+
+def _chain_proof_unsigned(proof: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "domain": "boule-workspace-chain-proof-v0.6",
+        **{key: value for key, value in proof.items() if key != "signature"},
+    }
+
+
+def build_chain_proof(
+    *,
+    problem_id: str,
+    from_count: int,
+    start_head: str | None,
+    events: list[dict[str, Any]],
+    clerk_private_key: Any,
+) -> dict[str, Any]:
+    """Sign a bounded hash-link suffix without disclosing event payloads."""
+    if (
+        isinstance(from_count, bool)
+        or not isinstance(from_count, int)
+        or from_count < 0
+        or len(events) > MAX_CHAIN_PROOF_LINKS
+    ):
+        raise ProtocolError("chain proof range is invalid")
+    _event_hash(start_head, "chain proof start head")
+    links: list[dict[str, Any]] = []
+    previous = start_head
+    for offset, event in enumerate(events):
+        if (
+            not isinstance(event, dict)
+            or event.get("seq") != from_count + offset
+            or event.get("prev_event_hash") != previous
+        ):
+            raise ProtocolError("chain proof events are not a contiguous suffix")
+        event_hash = _event_hash(event.get("event_hash"), "chain proof event hash", nullable=False)
+        links.append(
+            {
+                "seq": from_count + offset,
+                "prev_event_hash": previous,
+                "event_hash": event_hash,
+            }
+        )
+        previous = event_hash
+    proof = {
+        "schema": CHAIN_PROOF_SCHEMA,
+        "problem_id": problem_id,
+        "clerk_key": public_key_text(clerk_private_key),
+        "from_count": from_count,
+        "from_head": start_head,
+        "to_count": from_count + len(links),
+        "to_head": previous,
+        "links": links,
+    }
+    return {**proof, "signature": sign_object(clerk_private_key, _chain_proof_unsigned(proof))}
+
+
+def verify_chain_proof(
+    proof: Any,
+    *,
+    problem_id: str,
+    clerk_key: str,
+    from_count: int,
+    from_head: str | None,
+    to_count: int,
+) -> dict[str, Any]:
+    fields = {
+        "schema",
+        "problem_id",
+        "clerk_key",
+        "from_count",
+        "from_head",
+        "to_count",
+        "to_head",
+        "links",
+        "signature",
+    }
+    if not isinstance(proof, dict) or set(proof) != fields:
+        raise ProtocolError("case chain proof has invalid fields")
+    if (
+        proof["schema"] != CHAIN_PROOF_SCHEMA
+        or proof["problem_id"] != problem_id
+        or proof["clerk_key"] != clerk_key
+        or proof["from_count"] != from_count
+        or proof["from_head"] != from_head
+        or proof["to_count"] != to_count
+        or isinstance(from_count, bool)
+        or not isinstance(from_count, int)
+        or isinstance(to_count, bool)
+        or not isinstance(to_count, int)
+        or not from_count <= to_count
+        or to_count - from_count > MAX_CHAIN_PROOF_LINKS
+        or not isinstance(proof["links"], list)
+        or len(proof["links"]) != to_count - from_count
+    ):
+        raise ProtocolError("case chain proof does not match the requested range")
+    _event_hash(from_head, "case chain proof start head")
+    previous = from_head
+    for offset, link in enumerate(proof["links"]):
+        if (
+            not isinstance(link, dict)
+            or set(link) != {"seq", "prev_event_hash", "event_hash"}
+            or link["seq"] != from_count + offset
+            or link["prev_event_hash"] != previous
+        ):
+            raise ProtocolError("case chain proof link is invalid")
+        previous = _event_hash(link["event_hash"], "case chain proof event hash", nullable=False)
+    if proof["to_head"] != previous:
+        raise ProtocolError("case chain proof end head is invalid")
+    verify_object(clerk_key, _chain_proof_unsigned(proof), proof["signature"])
+    return proof

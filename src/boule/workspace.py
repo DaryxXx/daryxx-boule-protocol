@@ -21,6 +21,8 @@ from .policy import build_case_policy, load_case_policy, policy_digest, validate
 from .remote_protocol import (
     ENVELOPE_SCHEMA,
     EVENT_SCHEMA,
+    MAX_CHAIN_PROOF_LINKS,
+    build_chain_proof,
     build_receipt,
     build_snapshot,
     envelope_digest,
@@ -617,6 +619,33 @@ class Workspace:
             )
             return {"state": state, "snapshot": snapshot}
 
+    def remote_chain_proof(
+        self, from_count: int, to_count: int, maintainer_private_key: Any
+    ) -> dict[str, Any]:
+        if public_key_text(maintainer_private_key) != self.config["maintainer_key"]:
+            raise ProtocolError("wrong maintainer key")
+        if (
+            isinstance(from_count, bool)
+            or not isinstance(from_count, int)
+            or isinstance(to_count, bool)
+            or not isinstance(to_count, int)
+            or not 0 <= from_count <= to_count
+            or to_count - from_count > MAX_CHAIN_PROOF_LINKS
+        ):
+            raise ProtocolError("chain proof range is invalid")
+        with self._lock():
+            events = self._events()
+            if to_count > len(events):
+                raise ProtocolError("chain proof range exceeds the event log")
+            start_head = events[from_count - 1]["event_hash"] if from_count else None
+            return build_chain_proof(
+                problem_id=self.problem["problem_id"],
+                from_count=from_count,
+                start_head=start_head,
+                events=events[from_count:to_count],
+                clerk_private_key=maintainer_private_key,
+            )
+
     def _authorize(
         self,
         kind: str,
@@ -1066,9 +1095,13 @@ class Workspace:
                     at + timedelta(seconds=self.config["lease_seconds"]), c["absolute_deadline"]
                 )
             elif k == "checkpoint_published":
-                s["checkpoints"].append({"event_id": e["event_id"], **p})
+                s["checkpoints"].append(
+                    {"event_id": e["event_id"], "received_at": e["received_at"], **p}
+                )
             elif k == "message_posted":
-                s["messages"].append({"event_id": e["event_id"], **p})
+                s["messages"].append(
+                    {"event_id": e["event_id"], "received_at": e["received_at"], **p}
+                )
             elif k in {"claim_released", "handoff_published"}:
                 c = s["claims"][p["claim_id"]]
                 c["status"] = "released" if k == "claim_released" else "completed"
@@ -1076,6 +1109,7 @@ class Workspace:
                 if k == "handoff_published":
                     handoff = {
                         "event_id": e["event_id"],
+                        "received_at": e["received_at"],
                         "status": "queued_for_review",
                         **p,
                     }

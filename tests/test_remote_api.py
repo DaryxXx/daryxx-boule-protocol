@@ -16,9 +16,9 @@ import boule.remote_client as remote_client_module
 from boule.canonical import canonical_bytes
 from boule.clerk_api import build_server
 from boule.crypto import generate_private_key, public_key_text
-from boule.errors import RemoteTransportError
+from boule.errors import ProtocolError, RemoteTransportError
 from boule.remote_client import RemoteClient
-from boule.remote_protocol import build_envelope, verify_snapshot
+from boule.remote_protocol import build_envelope, verify_chain_proof, verify_snapshot
 from boule.session_store import SessionStore
 from boule.workspace import Workspace
 
@@ -192,6 +192,26 @@ def test_http_contract_strict_json_auth_idempotence_and_restart(tmp_path):
         assert first_status == 201
         assert retry_status == 200
         assert retry["receipt"] == first["receipt"]
+        proof_status, proof = raw_request(server + "/v1/chain/0/1", "GET")
+        assert proof_status == 200
+        verified_proof = verify_chain_proof(
+            proof,
+            problem_id="p-api",
+            clerk_key=workspace.config["maintainer_key"],
+            from_count=0,
+            from_head=None,
+            to_count=1,
+        )
+        assert verified_proof["to_head"] == first["event"]["event_hash"]
+        with pytest.raises(ProtocolError, match="requested range"):
+            verify_chain_proof(
+                proof,
+                problem_id="p-api",
+                clerk_key=workspace.config["maintainer_key"],
+                from_count=0,
+                from_head="f" * 64,
+                to_count=1,
+            )
         conflicting = build_envelope(
             request_id=signed["request_id"],
             problem_id="p-api",

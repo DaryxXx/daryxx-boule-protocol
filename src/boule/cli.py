@@ -6,15 +6,20 @@ import json
 import math
 import os
 import secrets
+import stat
 import sys
 import tempfile
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 from .canonical import canonical_bytes
-from .clerk_api import build_server
+from .case_scaffold import write_case_support_files
+from .clerk_api import build_server as build_clerk_server
 from .community import CommunityLedger, replay_community_ledger
 from .community_demo import (
     build_community_demo,
@@ -25,13 +30,18 @@ from .community_demo import (
 from .crypto import generate_private_key, public_key_text, write_private_key
 from .demo import build_demo_session
 from .errors import ProtocolError
+from .hub import Hub
 from .ledger import Ledger
 from .maintainer_advisor import ALLOWED_MODELS, advise
 from .policy import DISCLOSURE_MODES, build_case_policy
 from .problem_import import import_problem
 from .protocol import replay_ledger
+from .provisioner import GitHubAppRepositoryProvider, LocalRepositoryProvider
+from .registry import MAX_CHAIN_PROOF_ENTRIES, verify_registry_snapshot
+from .registry_api import build_server as build_registry_server
 from .remote_client import RemoteClient
 from .session_store import SessionStore, load_maintainer_key, maintainer_key_path
+from .trust_store import read_registry_trust, trust_registry_snapshot
 from .workspace import Workspace
 
 
@@ -184,50 +194,6 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _write_case_support_files(problem_dir: Path) -> None:
-    ignore = problem_dir / ".boule" / ".gitignore"
-    if not ignore.exists():
-        ignore.write_text(
-            "private/\nlock\nprojection.json\nmaintainer-receipt.json\nadvisories/\nwatcher.json\n",
-            encoding="utf-8",
-        )
-    guide = problem_dir / "BOULE.md"
-    if not guide.exists():
-        problem = json.loads((problem_dir / "problem.json").read_text(encoding="utf-8"))
-        policy = json.loads((problem_dir / ".boule" / "policy.json").read_text(encoding="utf-8"))
-        guide.write_text(
-            "# Continue this Boule problem\n\n"
-            f"Problem: {problem['problem']['title']}\n\n"
-            "Run `boule brief .`, start or load your session, choose one bounded route "
-            "that is not already claimed, and publish a signed checkpoint or handoff "
-            f"before stopping. The frozen evidence disclosure mode is `{policy['disclosure']}`. "
-            "Signed summaries and chat are public metadata; keep undisclosed methods behind "
-            "digests or authorized evidence references. Chat coordinates work but is not "
-            "contribution evidence. "
-            "A completed artifact may be sealed locally with `boule submit`; that command does "
-            "not contact Conjectures.io, authorize a fee, or establish acceptance. Do not perform "
-            "an external submission, spend funds, or expose private prompts or secrets.\n",
-            encoding="utf-8",
-        )
-    agent_rules = (
-        "# Boule case session\n\n"
-        "Run `boule brief .` and `boule status .` before substantive work. Use the "
-        "assigned `BOULE_SESSION`, or ask the controller to create one with `boule agent "
-        "start`. Choose one narrow unclaimed route; roles are optional labels only. Keep the "
-        "claim alive with a heartbeat, publish a signed checkpoint after reusable progress, "
-        "and publish ADVANCE, NEGATIVE, BLOCKED, or NO_SIGNAL before stopping. Declare every "
-        "handoff dependency and citation. Chat coordinates work but is not prize evidence. "
-        "If an exact solution artifact is evidence in an ADVANCE handoff, `boule submit` may "
-        "seal a local candidate. It never submits externally or authorizes payment. Never perform "
-        "an external submission, spend funds, expose secrets/private traces, claim another "
-        "session's work, or treat maintainer advice as mathematical review.\n"
-    )
-    for name in ("AGENTS.md", "CLAUDE.md"):
-        path = problem_dir / name
-        if not path.exists():
-            path.write_text(agent_rules, encoding="utf-8")
-
-
 def _init_problem(args: argparse.Namespace) -> int:
     result = import_problem(
         args.url,
@@ -254,7 +220,7 @@ def _init_problem(args: argparse.Namespace) -> int:
         initialized = True
     else:
         Workspace(result.path)
-    _write_case_support_files(result.path)
+    write_case_support_files(result.path)
     _print(
         {
             "created": result.created,
@@ -957,7 +923,7 @@ def _clerk_serve(args: argparse.Namespace) -> int:
             "non-loopback bind requires --allow-insecure-bind and a separate TLS proxy"
         )
     workspace = _workspace(args)
-    server = build_server(
+    server = build_clerk_server(
         workspace,
         load_maintainer_key(workspace),
         host=args.host,
@@ -994,6 +960,354 @@ def _remote_recover(args: argparse.Namespace) -> int:
             **_remote_metadata(result),
             "created": result["created"],
             "recovered": True,
+        },
+        args.json,
+    )
+    return 0
+
+
+def _registry_init(args: argparse.Namespace) -> int:
+    hub = Hub.initialize(args.registry)
+    _print(
+        {
+            "registry": str(hub.root.resolve()),
+            "registry_key": hub.registry.clerk_key,
+            "status": "READY",
+            "next": f"boule propose URL --registry {hub.root}",
+        },
+        args.json,
+    )
+    return 0
+
+
+def _propose_problem(args: argparse.Namespace) -> int:
+    hub = Hub(args.registry)
+    record, created = hub.propose(args.url, mode=args.mode)
+    _print(
+        {
+            "created": created,
+            "case": record,
+            "automatic_repository_created": False,
+            "next": (
+                "The trusted maintainer must independently revalidate and admit this proposal."
+            ),
+        },
+        args.json,
+    )
+    return 0
+
+
+def _registry_list(args: argparse.Namespace) -> int:
+    hub = Hub(args.registry)
+    hub.registry.refresh()
+    _print(
+        {
+            "registry_key": hub.registry.clerk_key,
+            "registry_head": hub.registry.head,
+            "problems": hub.registry.problems(),
+        },
+        args.json,
+    )
+    return 0
+
+
+def _registry_admit(args: argparse.Namespace) -> int:
+    record = Hub(args.registry).admit(args.case)
+    _print(
+        {
+            "case": record,
+            "source_revalidated": True,
+            "repository_created": False,
+            "next": f"boule registry provision {args.registry} {args.case} [provider options]",
+        },
+        args.json,
+    )
+    return 0
+
+
+def _private_key_file(path_value: str | None) -> bytes:
+    if not path_value:
+        raise ProtocolError(
+            "pass --github-key-file or set BOULE_GITHUB_APP_KEY_FILE to a mounted 0600 PEM"
+        )
+    path = Path(path_value)
+    try:
+        info = path.lstat()
+        if path.is_symlink() or not stat.S_ISREG(info.st_mode):
+            raise ProtocolError("GitHub App private key must be a regular non-symlink file")
+        if stat.S_IMODE(info.st_mode) != 0o600:
+            raise ProtocolError("GitHub App private key file permissions must be 0600")
+        return path.read_bytes()
+    except ProtocolError:
+        raise
+    except OSError as exc:
+        raise ProtocolError("cannot read the GitHub App private key file") from exc
+
+
+def _repository_provider(args: argparse.Namespace, hub: Hub):
+    if args.provider == "local":
+        return LocalRepositoryProvider(
+            args.repository_root or hub.root / "repositories",
+            public_base_url=args.public_repo_base,
+        )
+    organization = args.github_org or os.environ.get("BOULE_GITHUB_ORG")
+    app_id = args.github_app_id or os.environ.get("BOULE_GITHUB_APP_ID")
+    installation_id = args.github_installation_id or os.environ.get("BOULE_GITHUB_INSTALLATION_ID")
+    key_file = args.github_key_file or os.environ.get("BOULE_GITHUB_APP_KEY_FILE")
+    if not organization or not app_id or not installation_id:
+        raise ProtocolError("GitHub App organization, app id, and installation id are required")
+    return GitHubAppRepositoryProvider(
+        organization,
+        app_id=app_id,
+        installation_id=installation_id,
+        private_key_pem=_private_key_file(key_file),
+        private=args.visibility == "private",
+    )
+
+
+def _registry_provision(args: argparse.Namespace) -> int:
+    hub = Hub(args.registry)
+    result = hub.provision(args.case, _repository_provider(args, hub))
+    record = hub.registry.problem(args.case)
+    _print(
+        {
+            "case": record,
+            "repository_name": result.repository_name,
+            "repository_url": result.repository_url,
+            "repository_created": result.repository_created,
+            "workspace": str(result.local_path),
+            "marker_digest": result.marker_digest,
+            "next": (
+                "Start the case clerk behind TLS, then run boule registry activate "
+                f"{args.registry} {args.case} --clerk-url HTTPS_ORIGIN"
+            ),
+        },
+        args.json,
+    )
+    return 0
+
+
+def _registry_activate(args: argparse.Namespace) -> int:
+    record = Hub(args.registry).activate(args.case, args.clerk_url)
+    _print(
+        {
+            "case": record,
+            "case_snapshot_verified": True,
+            "status": "LIVE",
+        },
+        args.json,
+    )
+    return 0
+
+
+def _registry_tick(args: argparse.Namespace) -> int:
+    _print(Hub(args.registry).tick(), args.json)
+    return 0
+
+
+def _registry_watch(args: argparse.Namespace) -> int:
+    if args.cycles < 0 or args.interval < 0:
+        raise ProtocolError("watch cycles and interval must be non-negative")
+    if args.cycles == 0 and args.interval < 5:
+        raise ProtocolError("continuous watch interval must be at least 5 seconds")
+    hub = Hub(args.registry)
+    provider = _repository_provider(args, hub) if args.auto_provision else None
+    cycle = 0
+    last: dict[str, Any] | None = None
+    try:
+        while args.cycles == 0 or cycle < args.cycles:
+            cycle += 1
+            errors: dict[str, str] = {}
+            initial = hub.tick()
+            if args.auto_admit:
+                for case_id in initial["actions"]["validate"]:
+                    try:
+                        hub.admit(case_id)
+                    except ProtocolError as exc:
+                        errors[case_id] = str(exc)
+            if provider is not None:
+                current = hub.tick()
+                candidates = current["actions"]["provision"] + current["actions"]["recover"]
+                for case_id in candidates:
+                    try:
+                        hub.provision(case_id, provider)
+                    except ProtocolError as exc:
+                        errors[case_id] = str(exc)
+            if args.clerk_url_template:
+                current = hub.tick()
+                for case_id in current["actions"]["activate"]:
+                    record = hub.registry.problem(case_id)
+                    if record["repo_url"] is None:
+                        continue
+                    try:
+                        clerk_url = args.clerk_url_template.format(case_id=case_id)
+                        hub.activate(case_id, clerk_url)
+                    except (KeyError, ProtocolError) as exc:
+                        errors[case_id] = str(exc)
+            tick = hub.tick()
+            last = {"cycle": cycle, "tick": tick, "errors": errors}
+            hub.write_watcher_status(
+                {
+                    "pid": os.getpid(),
+                    "cycle": cycle,
+                    "last_tick_at": _now(),
+                    "registry_head": tick["registry_head"],
+                    "status_counts": tick["status_counts"],
+                    "error_cases": sorted(errors),
+                    "automatic_admission": args.auto_admit,
+                    "automatic_provisioning": args.auto_provision,
+                }
+            )
+            if args.cycles == 0 or cycle < args.cycles:
+                time.sleep(args.interval)
+    except KeyboardInterrupt:
+        pass
+    if last is None:
+        raise ProtocolError("registry watcher did not run")
+    _print(last, args.json)
+    return 0
+
+
+def _registry_serve(args: argparse.Namespace) -> int:
+    if not 0 <= args.port <= 65535:
+        raise ProtocolError("registry port must be between 0 and 65535")
+    if args.host not in {"127.0.0.1", "::1", "localhost"} and not args.allow_insecure_bind:
+        raise ProtocolError(
+            "non-loopback bind requires --allow-insecure-bind and a separate TLS proxy"
+        )
+    hub = Hub(args.registry)
+    server = build_registry_server(hub.registry, args.host, args.port)
+    host, port = server.server_address[:2]
+    _print(
+        {
+            "listening": f"http://{host}:{port}",
+            "mode": "trusted-registry-staging",
+            "registry_key": hub.registry.clerk_key,
+            "mutations_exposed": False,
+            "tls_built_in": False,
+        },
+        args.json,
+    )
+    sys.stdout.flush()
+    try:
+        server.serve_forever(poll_interval=0.25)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+def _registry_origin(value: str) -> str:
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ProtocolError("registry server must be an HTTP(S) origin without credentials")
+    if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
+        raise ProtocolError("remote registry HTTP is allowed only on loopback; use HTTPS remotely")
+    return value.rstrip("/")
+
+
+def _problems(args: argparse.Namespace) -> int:
+    if args.timeout <= 0:
+        raise ProtocolError("registry request timeout must be positive")
+    origin = _registry_origin(args.server)
+    request = Request(
+        origin + "/v1/problems",
+        headers={"Accept": "application/json", "User-Agent": "Boule/0.6"},
+    )
+    try:
+        with urlopen(request, timeout=args.timeout) as response:
+            raw = response.read(4 * 1024 * 1024 + 1)
+            if (
+                response.status != 200
+                or len(raw) > 4 * 1024 * 1024
+                or response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                != "application/json"
+            ):
+                raise ProtocolError("registry returned an invalid response")
+            if response.geturl() != origin + "/v1/problems":
+                raise ProtocolError("registry response redirected")
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ProtocolError("registry request failed") from exc
+    from .remote_protocol import strict_json_bytes
+
+    snapshot = verify_registry_snapshot(strict_json_bytes(raw), clerk_key=args.clerk_key)
+    if args.clerk_key is not None:
+        trust = "explicit_pin"
+    else:
+        trust = None
+        for attempt in range(2):
+            anchor = read_registry_trust(args.trust_store, origin)
+            proofs = []
+            if (
+                anchor is not None
+                and anchor["key"] == snapshot["clerk"]
+                and anchor["count"] < snapshot["count"]
+            ):
+                proof_deadline = time.monotonic() + args.timeout
+                current = anchor["count"]
+                while current < snapshot["count"]:
+                    remaining = proof_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ProtocolError("registry chain verification timed out")
+                    target = min(current + MAX_CHAIN_PROOF_ENTRIES, snapshot["count"])
+                    proof_request = Request(
+                        f"{origin}/v1/chain/{current}/{target}",
+                        headers={"Accept": "application/json", "User-Agent": "Boule/0.6"},
+                    )
+                    try:
+                        with urlopen(proof_request, timeout=remaining) as response:
+                            proof_raw = response.read(4 * 1024 * 1024 + 1)
+                            if (
+                                response.status != 200
+                                or len(proof_raw) > 4 * 1024 * 1024
+                                or response.geturl() != f"{origin}/v1/chain/{current}/{target}"
+                                or response.headers.get("Content-Type", "")
+                                .split(";", 1)[0]
+                                .strip()
+                                .lower()
+                                != "application/json"
+                            ):
+                                raise ProtocolError(
+                                    "registry chain endpoint returned an invalid response"
+                                )
+                    except (HTTPError, URLError, TimeoutError) as exc:
+                        raise ProtocolError("registry chain request failed") from exc
+                    proofs.append(strict_json_bytes(proof_raw))
+                    current = target
+            try:
+                trust_state = trust_registry_snapshot(
+                    args.trust_store,
+                    origin,
+                    snapshot["clerk"],
+                    snapshot["count"],
+                    snapshot["head"],
+                    proofs,
+                )
+                trust = f"tofu_{trust_state}"
+                break
+            except ProtocolError as exc:
+                if attempt == 0 and "does not match the requested range" in str(exc):
+                    continue
+                raise
+        if trust is None:
+            raise ProtocolError("registry trust anchor changed concurrently")
+    _print(
+        {
+            "registry": origin,
+            "registry_key": snapshot["clerk"],
+            "registry_key_pinned": True,
+            "registry_key_trust": trust,
+            "registry_head": snapshot["head"],
+            "problems": snapshot["problems"],
         },
         args.json,
     )
@@ -1088,6 +1402,120 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--max-renewals", type=int, default=3)
     init.add_argument("--json", action="store_true", help="emit compact JSON")
     init.set_defaults(handler=_init_problem)
+
+    propose = subparsers.add_parser(
+        "propose", help="propose one source task to a local trusted registry"
+    )
+    propose.add_argument("url", help="source problem URL; v0.6 accepts Conjectures.io")
+    propose.add_argument("--registry", required=True, help="local Boule registry directory")
+    propose.add_argument("--mode", choices=["formalized", "counterexample"])
+    propose.add_argument("--json", action="store_true", help="emit compact JSON")
+    propose.set_defaults(handler=_propose_problem)
+
+    problems = subparsers.add_parser(
+        "problems", help="list a remote registry's signed problem index"
+    )
+    problems.add_argument("--server", required=True, help="registry HTTPS origin")
+    problems.add_argument("--clerk-key", help="expected registry Ed25519 key")
+    problems.add_argument(
+        "--trust-store",
+        default=str(Path.home() / ".config" / "boule" / "trusted-registries.json"),
+        help="mode-0600 TOFU pin store used when --clerk-key is omitted",
+    )
+    problems.add_argument("--timeout", type=float, default=15.0)
+    problems.add_argument("--json", action="store_true", help="emit compact JSON")
+    problems.set_defaults(handler=_problems)
+
+    registry = subparsers.add_parser("registry", help="operate the local trusted problem registry")
+    registry_commands = registry.add_subparsers(dest="registry_command", required=True)
+
+    registry_init = registry_commands.add_parser("init", help="initialize a signed registry")
+    registry_init.add_argument("registry", help="new registry runtime directory")
+    registry_init.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_init.set_defaults(handler=_registry_init)
+
+    registry_list = registry_commands.add_parser("list", help="list local registry state")
+    registry_list.add_argument("registry", help="registry runtime directory")
+    registry_list.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_list.set_defaults(handler=_registry_list)
+
+    registry_admit = registry_commands.add_parser(
+        "admit", help="revalidate and admit one proposed source task"
+    )
+    registry_admit.add_argument("registry", help="registry runtime directory")
+    registry_admit.add_argument("case", help="proposed case id")
+    registry_admit.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_admit.set_defaults(handler=_registry_admit)
+
+    def repository_provider_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--provider", choices=["github-app", "local"], default="github-app")
+        command.add_argument("--repository-root", help="local mock repository directory")
+        command.add_argument(
+            "--public-repo-base",
+            help="HTTPS base representing locally hosted mock repositories",
+        )
+        command.add_argument("--github-org", help="organization; or BOULE_GITHUB_ORG")
+        command.add_argument("--github-app-id", help="app id; or BOULE_GITHUB_APP_ID")
+        command.add_argument(
+            "--github-installation-id",
+            help="installation id; or BOULE_GITHUB_INSTALLATION_ID",
+        )
+        command.add_argument(
+            "--github-key-file",
+            help="mounted 0600 PEM path; or BOULE_GITHUB_APP_KEY_FILE",
+        )
+        command.add_argument("--visibility", choices=["public", "private"], default="private")
+
+    registry_provision = registry_commands.add_parser(
+        "provision", help="idempotently create and bootstrap one admitted case repository"
+    )
+    registry_provision.add_argument("registry", help="registry runtime directory")
+    registry_provision.add_argument("case", help="admitted case id")
+    repository_provider_arguments(registry_provision)
+    registry_provision.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_provision.set_defaults(handler=_registry_provision)
+
+    registry_activate = registry_commands.add_parser(
+        "activate", help="verify a TLS case clerk and publish the case as LIVE"
+    )
+    registry_activate.add_argument("registry", help="registry runtime directory")
+    registry_activate.add_argument("case", help="provisioned case id")
+    registry_activate.add_argument("--clerk-url", required=True, help="case clerk HTTPS origin")
+    registry_activate.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_activate.set_defaults(handler=_registry_activate)
+
+    registry_tick = registry_commands.add_parser(
+        "tick", help="verify registry state and print deterministic pending actions"
+    )
+    registry_tick.add_argument("registry", help="registry runtime directory")
+    registry_tick.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_tick.set_defaults(handler=_registry_tick)
+
+    registry_watch = registry_commands.add_parser(
+        "watch", help="continuously validate and optionally provision admitted proposals"
+    )
+    registry_watch.add_argument("registry", help="registry runtime directory")
+    registry_watch.add_argument("--interval", type=float, default=30.0)
+    registry_watch.add_argument("--cycles", type=int, default=1, help="0 runs continuously")
+    registry_watch.add_argument("--auto-admit", action="store_true")
+    registry_watch.add_argument("--auto-provision", action="store_true")
+    registry_watch.add_argument(
+        "--clerk-url-template",
+        help="HTTPS origin template with {case_id}; activates only after verification",
+    )
+    repository_provider_arguments(registry_watch)
+    registry_watch.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_watch.set_defaults(handler=_registry_watch)
+
+    registry_serve = registry_commands.add_parser(
+        "serve", help="serve the landing and signed read-only registry API"
+    )
+    registry_serve.add_argument("registry", help="registry runtime directory")
+    registry_serve.add_argument("--host", default="127.0.0.1")
+    registry_serve.add_argument("--port", type=int, default=8786)
+    registry_serve.add_argument("--allow-insecure-bind", action="store_true")
+    registry_serve.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_serve.set_defaults(handler=_registry_serve)
 
     def server_argument(command: argparse.ArgumentParser) -> None:
         command.add_argument(
