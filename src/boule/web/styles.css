@@ -75,13 +75,23 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   padding: 0.65rem var(--pad-x);
 }
 
-.brand { display: flex; align-items: center; gap: 0.55rem; margin: 0; color: var(--yellow); }
+.brand-lockup { display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
+.brand {
+  display: flex; align-items: center; gap: 0.55rem; margin: 0;
+  color: var(--yellow); text-decoration: none;
+}
+.brand:hover .wordmark { color: var(--yellow); }
 .brand-mark { flex: none; }
 .wordmark {
   font-family: var(--font-display);
   font-weight: 600; font-size: 1.15rem; letter-spacing: 0.28em;
   color: var(--chalk);
 }
+.brand-attribution {
+  font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.04em;
+  color: var(--chalk-faint); text-decoration: none;
+}
+.brand-attribution:hover { color: var(--blue); }
 
 .topbar-nav { display: flex; flex-wrap: wrap; gap: 0.2rem 1.4rem; margin-left: auto; }
 .topbar-nav a {
@@ -783,6 +793,11 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
 
 @media (max-width: 470px) {
   .topbar-inner { gap: 0.45rem; }
+  .brand-lockup { position: relative; padding-bottom: 0.45rem; }
+  .brand-attribution {
+    position: absolute; left: 1.95rem; bottom: -0.05rem;
+    font-size: 0.5rem;
+  }
   .topbar-nav { justify-content: space-between; gap: 0.3rem; overflow-x: auto; }
   .topbar-nav a { font-size: 0.72rem; }
   .maintainer-status { padding-inline: 0.55rem; font-size: 0.64rem; }

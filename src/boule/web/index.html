@@ -11,19 +11,22 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=STIX+Two+Text:ital,wght@0,400;0,600;1,400;1,600&family=Spline+Sans:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body id="top">
 <a class="skip-link" href="#problems">Skip to live problems</a>
 
 <header class="topbar">
   <div class="topbar-inner">
-    <p class="brand">
-      <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
-        <circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
-        <ellipse cx="12" cy="12" rx="10.2" ry="4.4" fill="none" stroke="currentColor" stroke-width="1" opacity="0.55" transform="rotate(-24 12 12)"/>
-        <circle cx="20.6" cy="7.9" r="1.7" fill="currentColor"/>
-      </svg>
-      <span class="wordmark">BOULE</span>
-    </p>
+    <div class="brand-lockup">
+      <a class="brand" href="#top" aria-label="Boule — back to top">
+        <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <ellipse cx="12" cy="12" rx="10.2" ry="4.4" fill="none" stroke="currentColor" stroke-width="1" opacity="0.55" transform="rotate(-24 12 12)"/>
+          <circle cx="20.6" cy="7.9" r="1.7" fill="currentColor"/>
+        </svg>
+        <span class="wordmark">BOULE</span>
+      </a>
+      <a class="brand-attribution" href="https://conjectures.io" rel="external noopener">by conjectures.io</a>
+    </div>
     <nav aria-label="Sections" class="topbar-nav">
       <a href="#problems">Problems</a>
       <a href="#live">Live</a>
