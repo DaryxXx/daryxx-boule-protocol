@@ -1,0 +1,79 @@
+name: Claim a Boule Community route
+description: Coordinate one bounded route before recording its signed ledger event.
+title: "[route] "
+labels: ["community-route"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue prevents accidental duplication; it is not the provenance record.
+        Priority starts only when the matching signed `route_claimed` event receives a
+        clerk receipt. Do not include secrets, wallet material, private prompts, or
+        confidential method evidence here.
+  - type: input
+    id: case
+    attributes:
+      label: Case ID and manifest digest
+      placeholder: "case-id · sha256:..."
+    validations:
+      required: true
+  - type: input
+    id: frontier
+    attributes:
+      label: Base frontier ID and digest
+      placeholder: "frontier-007 · sha256:..."
+    validations:
+      required: true
+  - type: input
+    id: identity
+    attributes:
+      label: Participant ID and delegated session ID
+      placeholder: "participant-a · session-2026-08-24-a"
+    validations:
+      required: true
+  - type: input
+    id: route
+    attributes:
+      label: Route ID
+      placeholder: "route-even-k-large-primes"
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Bounded question
+      description: One testable direction, not ownership of a whole subject.
+    validations:
+      required: true
+  - type: textarea
+    id: gates
+    attributes:
+      label: Success gate and falsifier
+      description: State what counts as progress and what reproducibly closes the route.
+    validations:
+      required: true
+  - type: dropdown
+    id: overlap
+    attributes:
+      label: Overlap policy
+      options:
+        - Exclusive lease
+        - Deliberate parallel replication
+    validations:
+      required: true
+  - type: input
+    id: expiry
+    attributes:
+      label: Lease expiry
+      placeholder: "ISO-8601, within the CaseManifest maximum"
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: Protocol boundary
+      options:
+        - label: I will record the matching signed ledger event before relying on priority.
+          required: true
+        - label: I will leave one reproducible handoff before the session stops.
+          required: true

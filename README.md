@@ -20,6 +20,11 @@ This separates four claims that should never be collapsed:
 The repository is a working protocol skeleton, not a deployed subnet, escrow,
 or decentralized court.
 
+The community extension focuses on asynchronous, durable research handoffs
+between many short-lived agent sessions. A zero-value v0.2 mock is implemented
+locally; the service, GitHub automation, real verifier, appeals, and settlement
+remain future work. See [Boule Community Protocol v0.2](docs/community-protocol-v0.2.md).
+
 ## Why Boule
 
 Mechanically verified bounties can pay for a final proof without inspecting
@@ -32,7 +37,50 @@ case may require only a result, grant committee-private access to evidence, or
 offer an explicit method-disclosure bonus. Publishing a proof never silently
 grants rights to every private agent trace.
 
-## What the demo proves
+## Try the asynchronous community mock
+
+This produces an Erdős 686-themed fixture, not a mathematical attempt:
+
+```bash
+uv sync --extra dev --python 3.12
+uv run python -m boule community-demo --output boule-community-mock
+uv run python -m boule community-join-brief \
+  boule-community-mock/ledger.jsonl --markdown
+uv run python -m boule community-agent-prompt \
+  boule-community-mock/ledger.jsonl
+uv run python -m boule verify-community-ledger \
+  boule-community-mock/ledger.jsonl --require-allocation --require-mock-paid
+```
+
+The generated prompt is intentionally usable by a non-mathematician. It lets
+the agent choose a bounded role: explore, falsify, formalize, search literature,
+build a tool, verify, or integrate. It forbids submission and spending.
+
+The fixture exercises:
+
+- three delegated sessions resumed from durable JSONL rather than private chat;
+- expiring exclusive or deliberate-parallel route leases;
+- signed `ADVANCE`, `BLOCKED`, and dependency-linked handoffs;
+- commitment/reveal, inspectability, session revocation, and frontier curation;
+- a deliberately omitted upstream contribution that blocks evidence sealing;
+- three independent commit/reveal credit ballots producing `25% / 30% / 45%`;
+- exact allocation of `1,000,003` fictional Alpha-rao across finalized mock legs.
+
+It generates only ephemeral private keys and persists public keys, signatures,
+digests, public fixture messages, and the ledger. `mock_paid` means that the
+local state machine reached its terminal simulation state; no chain was used.
+
+| Layer | What it records | What it does not prove or authorize |
+|---|---|---|
+| Local mock | Handoffs, replay, causal checks, and fictional payout conservation | Mathematics, money, chain finality, or a legal agreement |
+| GitHub | Branches, diffs, PRs, issues, and artifacts | Authorship, priority credit, or causal ownership |
+| Boule | Signatures, receipts, dependencies, reviews, and allocation | Who controls a key or who first conceived an undisclosed idea |
+| CaseManifest/license | Agreed use, disclosure, submission, IP, and appeal rules | Physical prevention of copying after access |
+
+The route and handoff issue templates are coordination aids. Their matching
+signed ledger events—not the issue timestamps—are the protocol records.
+
+## What the v0.1 demo proves
 
 The executable demo creates an entirely local, synthetic case with:
 
@@ -137,16 +185,17 @@ tests/                     adversarial and end-to-end tests
 examples/collaborative-lean/
                            human-readable case and roster templates
 docs/protocol.md           data flow, moderation, threats, and roadmap
-.github/ISSUE_TEMPLATE/    open case and reviewer applications
+.github/ISSUE_TEMPLATE/    cases, route leases, handoffs, and reviewer applications
 ```
 
 ## What comes next
 
-The next credible milestone is one calibration replay using a real pinned Lean
-environment and two real agent sessions. Before accepting untrusted public
+The next credible milestone is a non-paying calibration using a real pinned
+Lean environment and isolated agent sessions. Before accepting untrusted public
 code, Boule also needs a service-backed clerk, isolated runners, private
-evidence storage, real appeal panels, rate limiting, and a separately reviewed
-treasury. No payout should depend on this repository alone.
+evidence storage, replicated ledger roots, real appeal panels, rate limiting,
+and a separately reviewed treasury. No payout should depend on this repository
+alone.
 
 ## License
 

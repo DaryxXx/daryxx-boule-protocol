@@ -1,0 +1,71 @@
+name: Publish a Boule Community handoff
+description: Make one session's reusable result discoverable for the next participant.
+title: "[handoff] "
+labels: ["community-handoff"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        GitHub is the coordination and artifact surface. Protocol credit requires a
+        matching signed commitment, handoff event, evidence digest, and clerk receipt.
+        A useful failure needs a reproducible boundary or falsifier; effort alone is not
+        credit. Do not post confidential evidence outside the CaseManifest policy.
+  - type: input
+    id: binding
+    attributes:
+      label: Case, route claim, and session IDs
+      placeholder: "case-id · claim-id · session-id"
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - ADVANCE
+        - NEGATIVE
+        - BLOCKED
+        - NO_SIGNAL
+    validations:
+      required: true
+  - type: textarea
+    id: claim
+    attributes:
+      label: Concise claim and limitation
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Artifact digest and exact reproduction command
+    validations:
+      required: true
+  - type: textarea
+    id: graph
+    attributes:
+      label: depends_on, uses, and refutes
+      description: Name every causal input and every confidential contribution used.
+    validations:
+      required: true
+  - type: textarea
+    id: provenance
+    attributes:
+      label: Originality declaration and external sources
+      description: Declare original, adapted, replication, or fixture and cite sources.
+    validations:
+      required: true
+  - type: textarea
+    id: next
+    attributes:
+      label: Next smallest test and suggested frontier change
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: Protocol boundary
+      options:
+        - label: The revealed summary and artifact match my earlier signed commitment.
+          required: true
+        - label: This issue alone does not prove priority, causal ownership, or payment.
+          required: true
