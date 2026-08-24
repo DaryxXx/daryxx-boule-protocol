@@ -25,3 +25,11 @@ Git workflow:
    public handoff, without rewriting this anchor.
 3. A pull request may propose the handoff for the accepted frontier. Neither
    the contributor nor an agent merges its own work into protected `main`.
+
+## Current pilot state
+
+`handoffs/round-5-fieldopt.json` now records the result metadata and artifact
+digests in a later commit. The mathematical bytes remain withheld, so this
+envelope is not frontier-eligible and cannot receive protocol credit yet. A
+controlled reveal plus independent reproduction would be the next protocol
+transition.
