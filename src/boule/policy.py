@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from .canonical import digest_object
 from .errors import ProtocolError
+from .remote_protocol import strict_json_bytes
 
 POLICY_SCHEMA = "boule-case-policy/0.1"
 DISCLOSURE_MODES = frozenset({"public", "commitment_only", "committee"})
@@ -49,8 +49,8 @@ def validate_case_policy(policy: Any, problem: dict[str, Any]) -> dict[str, Any]
 
 def load_case_policy(path: str | Path, problem: dict[str, Any]) -> dict[str, Any]:
     try:
-        policy = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        policy = strict_json_bytes(Path(path).read_bytes())
+    except (OSError, ProtocolError) as exc:
         raise ProtocolError("case policy is missing or invalid JSON") from exc
     return validate_case_policy(policy, problem)
 

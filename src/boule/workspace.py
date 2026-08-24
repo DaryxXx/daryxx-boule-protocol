@@ -1,4 +1,4 @@
-"""Local v0.4 operational ledger for an imported Boule problem manifest."""
+"""Boule workspace ledger with local v0.4 and clerk-ordered v0.5 events."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import tempfile
+import threading
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -15,8 +16,18 @@ from typing import Any
 
 from .canonical import canonical_bytes, digest_object
 from .crypto import load_public_key, public_key_text, sign_object, verify_object
-from .errors import ProtocolError
+from .errors import ProtocolError, RequestConflictError, StaleHeadError
 from .policy import build_case_policy, load_case_policy, policy_digest, validate_case_policy
+from .remote_protocol import (
+    ENVELOPE_SCHEMA,
+    EVENT_SCHEMA,
+    build_receipt,
+    build_snapshot,
+    envelope_digest,
+    strict_json_bytes,
+    verify_envelope,
+    verify_receipt,
+)
 
 PARTICIPANT_EVENTS = {
     "session_started",
@@ -46,6 +57,35 @@ IDEMPOTENT_EVENTS = {
 VERIFIER_DECISIONS = frozenset({"VERIFIED", "REJECTED"})
 REVIEW_DECISIONS = frozenset({"APPROVED", "REJECTED", "PARTIAL_AWARD"})
 REWARD_DECISIONS = frozenset({"ELIGIBLE", "INELIGIBLE"})
+MAX_SESSION_LIFETIME = timedelta(hours=168)
+
+LEGACY_EVENT_FIELDS = {
+    "seq",
+    "event_id",
+    "received_at",
+    "kind",
+    "actor",
+    "payload",
+    "prev_event_hash",
+    "event_hash",
+    "signature",
+}
+REMOTE_EVENT_FIELDS = {
+    "schema",
+    "seq",
+    "event_id",
+    "received_at",
+    "kind",
+    "actor",
+    "payload",
+    "prev_event_hash",
+    "request_id",
+    "base_event_hash",
+    "envelope_digest",
+    "envelope_signature",
+    "event_hash",
+    "clerk_receipt",
+}
 
 
 def _time(value: str) -> datetime:
@@ -108,13 +148,14 @@ class Workspace:
                 "workspace needs problem.json, .boule/policy.json, and .boule/config.json"
             )
         try:
-            self.problem = json.loads(self.problem_path.read_text())
-            self.config = json.loads(self.config_path.read_text())
-        except json.JSONDecodeError as exc:
+            self.problem = strict_json_bytes(self.problem_path.read_bytes())
+            self.config = strict_json_bytes(self.config_path.read_bytes())
+        except (OSError, ProtocolError) as exc:
             raise ProtocolError("workspace JSON is invalid") from exc
         self.policy = load_case_policy(self.policy_path, self.problem)
         self._validate()
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._thread_lock = threading.RLock()
         self.events_dir = self.control / "events"
         self.receipts_dir = self.control / "receipts"
         self.receipt_path = self.control / "maintainer-receipt.json"
@@ -133,8 +174,8 @@ class Workspace:
         if not problem_path.exists():
             raise ProtocolError("initialize requires an imported problem.json")
         try:
-            problem = json.loads(problem_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            problem = strict_json_bytes(problem_path.read_bytes())
+        except (OSError, ProtocolError) as exc:
             raise ProtocolError("imported problem manifest is invalid JSON") from exc
         selected_policy = validate_case_policy(
             policy or build_case_policy(problem, "commitment_only"), problem
@@ -154,11 +195,16 @@ class Workspace:
     @staticmethod
     def _write(path: Path, value: Any, exclusive: bool = False) -> None:
         if exclusive:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as h:
-                h.write(canonical_bytes(value) + b"\n")
-                h.flush()
-                os.fsync(h.fileno())
+            fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+            try:
+                with os.fdopen(fd, "wb") as h:
+                    h.write(canonical_bytes(value) + b"\n")
+                    h.flush()
+                    os.fsync(h.fileno())
+                os.link(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
         else:
             fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
             try:
@@ -227,12 +273,13 @@ class Workspace:
 
     @contextmanager
     def _lock(self) -> Iterator[None]:
-        with (self.control / "lock").open("r+") as h:
-            fcntl.flock(h, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(h, fcntl.LOCK_UN)
+        with self._thread_lock:
+            with (self.control / "lock").open("r+") as h:
+                fcntl.flock(h, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(h, fcntl.LOCK_UN)
 
     def _verify_receipt(self, r: dict[str, Any]) -> None:
         fields = {"at", "head_event_hash", "event_count", "status_digest", "signature"}
@@ -254,8 +301,8 @@ class Workspace:
 
     def _load_receipt(self, path: Path) -> dict[str, Any]:
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            value = strict_json_bytes(path.read_bytes())
+        except (OSError, ProtocolError) as exc:
             raise ProtocolError(f"maintainer receipt is invalid: {path.name}") from exc
         self._verify_receipt(value)
         return value
@@ -279,29 +326,21 @@ class Workspace:
         events = []
         for p in sorted(self.events_dir.glob("*.json")):
             try:
-                value = json.loads(p.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
+                value = strict_json_bytes(p.read_bytes())
+            except (OSError, ProtocolError) as exc:
                 raise ProtocolError(f"invalid event file {p.name}") from exc
             if not isinstance(value, dict):
                 raise ProtocolError(f"invalid event object {p.name}")
             events.append(value)
         previous = None
+        remote_request_ids: set[str] = set()
         for seq, e in enumerate(events):
-            fields = {
-                "seq",
-                "event_id",
-                "received_at",
-                "kind",
-                "actor",
-                "payload",
-                "prev_event_hash",
-                "event_hash",
-                "signature",
-            }
+            fields = frozenset(e)
+            if fields not in {frozenset(LEGACY_EVENT_FIELDS), frozenset(REMOTE_EVENT_FIELDS)}:
+                raise ProtocolError("event chain fields are invalid")
             if (
-                set(e) != fields
-                or isinstance(e["seq"], bool)
-                or not isinstance(e["seq"], int)
+                isinstance(e.get("seq"), bool)
+                or not isinstance(e.get("seq"), int)
                 or e["seq"] != seq
                 or e["prev_event_hash"] != previous
             ):
@@ -312,15 +351,70 @@ class Workspace:
             _text(e["event_id"], "event_id", 128)
             if not isinstance(e["payload"], dict):
                 raise ProtocolError("event payload must be an object")
-            identity_digest = digest_object([e["kind"], e["payload"], e["received_at"]])
-            expected_id = f"{seq:08d}-{identity_digest[:16]}"
-            if e["event_id"] != expected_id:
-                raise ProtocolError("event id does not match its signed contents")
-            load_public_key(e["actor"])
-            unsigned = {k: e[k] for k in fields - {"event_hash", "signature"}}
-            if e["event_hash"] != digest_object(unsigned):
-                raise ProtocolError("event hash mismatch")
-            verify_object(e["actor"], unsigned, e["signature"])
+            if fields == LEGACY_EVENT_FIELDS:
+                identity_digest = digest_object([e["kind"], e["payload"], e["received_at"]])
+                expected_id = f"{seq:08d}-{identity_digest[:16]}"
+                if e["event_id"] != expected_id:
+                    raise ProtocolError("event id does not match its signed contents")
+                load_public_key(e["actor"])
+                unsigned = {k: e[k] for k in LEGACY_EVENT_FIELDS - {"event_hash", "signature"}}
+                if e["event_hash"] != digest_object(unsigned):
+                    raise ProtocolError("event hash mismatch")
+                verify_object(e["actor"], unsigned, e["signature"])
+            elif e.get("schema") == EVENT_SCHEMA:
+                if e["kind"] not in PARTICIPANT_EVENTS:
+                    raise ProtocolError("remote event kind is not a participant event")
+                if e["base_event_hash"] != e["prev_event_hash"]:
+                    raise ProtocolError("remote event base does not match its ordered predecessor")
+                if e["request_id"] in remote_request_ids:
+                    raise ProtocolError("remote request id is not unique")
+                envelope = {
+                    "schema": ENVELOPE_SCHEMA,
+                    "request_id": e["request_id"],
+                    "problem_id": self.problem["problem_id"],
+                    "clerk_key": self.config["maintainer_key"],
+                    "base_event_hash": e["base_event_hash"],
+                    "kind": e["kind"],
+                    "actor": e["actor"],
+                    "payload": e["payload"],
+                    "signature": e["envelope_signature"],
+                }
+                verify_envelope(
+                    envelope,
+                    problem_id=self.problem["problem_id"],
+                    clerk_key=self.config["maintainer_key"],
+                    allowed_kinds=PARTICIPANT_EVENTS,
+                )
+                if e["envelope_digest"] != envelope_digest(envelope):
+                    raise ProtocolError("remote event envelope digest mismatch")
+                expected_id = f"{seq:08d}-{digest_object(envelope)[:16]}"
+                if e["event_id"] != expected_id:
+                    raise ProtocolError("remote event id does not match its envelope")
+                core = {
+                    key: e[key] for key in REMOTE_EVENT_FIELDS - {"event_hash", "clerk_receipt"}
+                }
+                if e["event_hash"] != digest_object(core):
+                    raise ProtocolError("remote event hash mismatch")
+                receipt = verify_receipt(
+                    e["clerk_receipt"],
+                    problem_id=self.problem["problem_id"],
+                    clerk_key=self.config["maintainer_key"],
+                    request_id=e["request_id"],
+                    envelope=envelope,
+                )
+                for key in (
+                    "seq",
+                    "event_id",
+                    "received_at",
+                    "prev_event_hash",
+                    "event_hash",
+                    "envelope_digest",
+                ):
+                    if receipt[key] != e[key]:
+                        raise ProtocolError("remote clerk receipt does not match its event")
+                remote_request_ids.add(e["request_id"])
+            else:
+                raise ProtocolError("remote event schema is unsupported")
             if seq and _time(e["received_at"]) < _time(events[seq - 1]["received_at"]):
                 raise ProtocolError("event receipt times must be monotonic")
             previous = e["event_hash"]
@@ -329,7 +423,14 @@ class Workspace:
             instant = _time(event["received_at"])
             state = self._state_from(validated, instant)
             if event["kind"] in PARTICIPANT_EVENTS:
-                self._authorize(event["kind"], event["payload"], event["actor"], state, instant)
+                self._authorize(
+                    event["kind"],
+                    event["payload"],
+                    event["actor"],
+                    state,
+                    instant,
+                    remote=event.get("schema") == EVENT_SCHEMA,
+                )
             else:
                 self._authorize_maintainer(
                     event["kind"], event["payload"], event["actor"], state, instant
@@ -401,8 +502,130 @@ class Workspace:
             )
             return event
 
+    def append_envelope(
+        self, envelope: dict[str, Any], maintainer_private_key: Any
+    ) -> dict[str, Any]:
+        """Order one participant-signed envelope and return its durable clerk receipt."""
+        if public_key_text(maintainer_private_key) != self.config["maintainer_key"]:
+            raise ProtocolError("wrong maintainer key")
+        try:
+            stable_envelope = json.loads(canonical_bytes(envelope))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ProtocolError("remote envelope is not canonical JSON") from exc
+        verify_envelope(
+            stable_envelope,
+            problem_id=self.problem["problem_id"],
+            clerk_key=self.config["maintainer_key"],
+            allowed_kinds=PARTICIPANT_EVENTS,
+        )
+        observed = self._clock()
+        if not isinstance(observed, datetime) or observed.tzinfo is None:
+            raise ProtocolError("workspace clock must return a timezone-aware datetime")
+        with self._lock():
+            events = self._events()
+            digest = envelope_digest(stable_envelope)
+            previous_request = next(
+                (
+                    event
+                    for event in events
+                    if event.get("schema") == EVENT_SCHEMA
+                    and event.get("request_id") == stable_envelope["request_id"]
+                ),
+                None,
+            )
+            if previous_request is not None:
+                if previous_request["envelope_digest"] != digest:
+                    raise RequestConflictError("remote request id was reused with another envelope")
+                return {
+                    "created": False,
+                    "event": previous_request,
+                    "receipt": previous_request["clerk_receipt"],
+                }
+            current_head = events[-1]["event_hash"] if events else None
+            if stable_envelope["base_event_hash"] != current_head:
+                raise StaleHeadError(current_head, len(events))
+            now = observed.astimezone(UTC)
+            if events:
+                now = max(now, _time(events[-1]["received_at"]))
+            received_at = _stamp(now)
+            state = self._state_from(events, now)
+            self._authorize(
+                stable_envelope["kind"],
+                stable_envelope["payload"],
+                stable_envelope["actor"],
+                state,
+                now,
+                remote=True,
+            )
+            core = {
+                "schema": EVENT_SCHEMA,
+                "seq": len(events),
+                "event_id": f"{len(events):08d}-{digest_object(stable_envelope)[:16]}",
+                "received_at": received_at,
+                "kind": stable_envelope["kind"],
+                "actor": stable_envelope["actor"],
+                "payload": stable_envelope["payload"],
+                "prev_event_hash": current_head,
+                "request_id": stable_envelope["request_id"],
+                "base_event_hash": stable_envelope["base_event_hash"],
+                "envelope_digest": digest,
+                "envelope_signature": stable_envelope["signature"],
+            }
+            event_without_receipt = {**core, "event_hash": digest_object(core)}
+            receipt = build_receipt(
+                event_without_receipt,
+                problem_id=self.problem["problem_id"],
+                clerk_private_key=maintainer_private_key,
+            )
+            event = {**event_without_receipt, "clerk_receipt": receipt}
+            self._write(
+                self.events_dir / f"{event['seq']:08d}-{event['event_id']}.json", event, True
+            )
+            return {"created": True, "event": event, "receipt": receipt}
+
+    def remote_receipt(self, request_id: str, maintainer_private_key: Any) -> dict[str, Any] | None:
+        if public_key_text(maintainer_private_key) != self.config["maintainer_key"]:
+            raise ProtocolError("wrong maintainer key")
+        with self._lock():
+            events = self._events()
+            event = next(
+                (
+                    item
+                    for item in events
+                    if item.get("schema") == EVENT_SCHEMA and item.get("request_id") == request_id
+                ),
+                None,
+            )
+            return event["clerk_receipt"] if event is not None else None
+
+    def remote_snapshot(self, received_at: str, maintainer_private_key: Any) -> dict[str, Any]:
+        if public_key_text(maintainer_private_key) != self.config["maintainer_key"]:
+            raise ProtocolError("wrong maintainer key")
+        requested = _time(received_at)
+        with self._lock():
+            events = self._events()
+            now = max(requested, _time(events[-1]["received_at"])) if events else requested
+            at = _stamp(now)
+            state = self._public(self._state_from(events, now), now)
+            snapshot = build_snapshot(
+                problem_id=self.problem["problem_id"],
+                at=at,
+                event_count=len(events),
+                head_event_hash=events[-1]["event_hash"] if events else None,
+                state=state,
+                clerk_private_key=maintainer_private_key,
+            )
+            return {"state": state, "snapshot": snapshot}
+
     def _authorize(
-        self, kind: str, p: dict[str, Any], actor: str, s: dict[str, Any], now: datetime
+        self,
+        kind: str,
+        p: dict[str, Any],
+        actor: str,
+        s: dict[str, Any],
+        now: datetime,
+        *,
+        remote: bool = False,
     ) -> None:
         if not isinstance(p, dict) or p.get("problem_id") != self.problem["problem_id"]:
             raise ProtocolError("event belongs to another problem")
@@ -433,8 +656,11 @@ class Workspace:
                 raise ProtocolError("session did not assent to the frozen case policy")
             if p["session_id"] in s["sessions"] or p["session_key"] in s["session_keys"]:
                 raise ProtocolError("duplicate session")
-            if _time(p["not_after"]) <= now:
+            not_after = _time(p["not_after"])
+            if not_after <= now:
                 raise ProtocolError("session already expired")
+            if remote and not_after > now + MAX_SESSION_LIFETIME:
+                raise ProtocolError("session lifetime exceeds 168 hours")
             return
         session = s["session_keys"].get(actor)
         if session is None or _time(session["not_after"]) <= now:
@@ -1085,8 +1311,8 @@ class Workspace:
             previous = None
             if self.receipt_path.exists():
                 try:
-                    previous = json.loads(self.receipt_path.read_text())
-                except json.JSONDecodeError as exc:
+                    previous = strict_json_bytes(self.receipt_path.read_bytes())
+                except (OSError, ProtocolError) as exc:
                     raise ProtocolError("maintainer receipt JSON is invalid") from exc
             if (
                 previous

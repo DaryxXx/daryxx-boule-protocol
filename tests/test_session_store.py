@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pytest
 
@@ -37,6 +38,7 @@ def workspace(tmp_path):
             "stale_seconds": 60,
             "max_renewals": 2,
         },
+        clock=lambda: datetime.fromisoformat("2030-01-01T00:00:00+00:00"),
     )
 
 
@@ -74,3 +76,23 @@ def test_profile_and_key_mismatch_fail_closed(tmp_path):
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(ProtocolError, match="another problem"):
         store.load(profile["session_id"])
+
+
+def test_external_append_interruption_preserves_session_material_for_recovery(tmp_path):
+    work = workspace(tmp_path)
+    store = SessionStore(work)
+
+    def interrupted(*_args):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        store.start(
+            participant_id="agent-a",
+            controller_id="owner",
+            label="remote",
+            not_after="2030-01-02T00:00:00Z",
+            appender=interrupted,
+        )
+
+    assert len(list(store.sessions.glob("*.pem"))) == 1
+    assert len(list(store.profiles.glob("*.json"))) == 1

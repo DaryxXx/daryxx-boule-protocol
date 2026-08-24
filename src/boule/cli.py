@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import canonical_bytes
+from .clerk_api import build_server
 from .community import CommunityLedger, replay_community_ledger
 from .community_demo import (
     build_community_demo,
@@ -29,6 +30,7 @@ from .maintainer_advisor import ALLOWED_MODELS, advise
 from .policy import DISCLOSURE_MODES, build_case_policy
 from .problem_import import import_problem
 from .protocol import replay_ledger
+from .remote_client import RemoteClient
 from .session_store import SessionStore, load_maintainer_key, maintainer_key_path
 from .workspace import Workspace
 
@@ -274,6 +276,53 @@ def _workspace(args: argparse.Namespace) -> Workspace:
     return Workspace(Path(args.problem))
 
 
+def _server(args: argparse.Namespace, *, required: bool = False) -> str | None:
+    value = getattr(args, "server", None) or os.environ.get("BOULE_SERVER")
+    if required and not value:
+        raise ProtocolError("pass --server or set BOULE_SERVER")
+    return value
+
+
+def _remote_client(workspace: Workspace, args: argparse.Namespace) -> RemoteClient | None:
+    server = _server(args)
+    return RemoteClient(workspace, server) if server else None
+
+
+def _workspace_state(workspace: Workspace, args: argparse.Namespace) -> dict[str, Any]:
+    client = _remote_client(workspace, args)
+    if client is not None:
+        if getattr(args, "at", None):
+            raise ProtocolError("--at is not supported with a remote signed snapshot")
+        return client.fetch_state()["state"]
+    return workspace.state(getattr(args, "at", None) or _now())
+
+
+def _remote_metadata(result: dict[str, Any] | None) -> dict[str, Any]:
+    if result is None:
+        return {}
+    receipt = result["receipt"]
+    return {
+        "remote": True,
+        "request_id": receipt["request_id"],
+        "clerk_receipt": receipt,
+        "receipt_path": result["completed_path"],
+    }
+
+
+def _append_participant(
+    args: argparse.Namespace,
+    workspace: Workspace,
+    kind: str,
+    payload: dict[str, Any],
+    private_key: Any,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    client = _remote_client(workspace, args)
+    if client is None:
+        return workspace.append(kind, payload, private_key), None
+    result = client.append(kind, payload, private_key)
+    return result["event"], result
+
+
 def _session(args: argparse.Namespace) -> tuple[Workspace, dict[str, Any], Any]:
     workspace = _workspace(args)
     session_id = args.session or os.environ.get("BOULE_SESSION")
@@ -300,8 +349,13 @@ def _task_payload(workspace: Workspace) -> dict[str, str]:
     }
 
 
-def _active_claim(workspace: Workspace, profile: dict[str, Any], claim_id: str | None) -> str:
-    state = workspace.state(_now())
+def _active_claim(
+    workspace: Workspace,
+    profile: dict[str, Any],
+    claim_id: str | None,
+    args: argparse.Namespace,
+) -> str:
+    state = _workspace_state(workspace, args)
     if claim_id:
         return claim_id
     session = next(
@@ -346,11 +400,22 @@ def _agent_start(args: argparse.Namespace) -> int:
     if not math.isfinite(args.hours) or not 0 < args.hours <= 168:
         raise ProtocolError("session lifetime must be greater than 0 and at most 168 hours")
     started = datetime.now(UTC)
+    client = _remote_client(workspace, args)
+    remote_result: dict[str, Any] | None = None
+
+    def append(kind: str, payload: dict[str, Any], key: Any) -> dict[str, Any]:
+        nonlocal remote_result
+        if client is None:
+            return workspace.append(kind, payload, key)
+        remote_result = client.append(kind, payload, key)
+        return remote_result["event"]
+
     profile = SessionStore(workspace).start(
         participant_id=args.participant,
         controller_id=args.controller,
         label=args.label,
         not_after=(started + timedelta(hours=args.hours)).isoformat().replace("+00:00", "Z"),
+        appender=append if client is not None else None,
     )
     _print(
         {
@@ -362,6 +427,7 @@ def _agent_start(args: argparse.Namespace) -> int:
             "not_after": profile["not_after"],
             "profile_path": profile["profile_path"],
             "next": f"boule brief {workspace.root} --session {profile['session_id']}",
+            **_remote_metadata(remote_result),
         },
         args.json,
     )
@@ -371,7 +437,9 @@ def _agent_start(args: argparse.Namespace) -> int:
 def _agent_claim(args: argparse.Namespace) -> int:
     workspace, profile, key = _session(args)
     claim_id = args.claim_id or f"c-{secrets.token_hex(8)}"
-    event = workspace.append(
+    event, remote = _append_participant(
+        args,
+        workspace,
         "work_claimed",
         {
             **_identity_payload(workspace, profile),
@@ -383,15 +451,17 @@ def _agent_claim(args: argparse.Namespace) -> int:
         },
         key,
     )
-    _print({**_public_event(event), "claim_id": claim_id}, args.json)
+    _print({**_public_event(event), "claim_id": claim_id, **_remote_metadata(remote)}, args.json)
     return 0
 
 
 def _agent_heartbeat(args: argparse.Namespace) -> int:
     workspace, profile, key = _session(args)
-    claim_id = _active_claim(workspace, profile, args.claim)
+    claim_id = _active_claim(workspace, profile, args.claim, args)
     progress_digest = f"sha256:{hashlib.sha256(args.progress.encode()).hexdigest()}"
-    event = workspace.append(
+    event, remote = _append_participant(
+        args,
+        workspace,
         "claim_heartbeat",
         {
             **_identity_payload(workspace, profile),
@@ -401,7 +471,12 @@ def _agent_heartbeat(args: argparse.Namespace) -> int:
         key,
     )
     _print(
-        {**_public_event(event), "claim_id": claim_id, "progress_digest": progress_digest},
+        {
+            **_public_event(event),
+            "claim_id": claim_id,
+            "progress_digest": progress_digest,
+            **_remote_metadata(remote),
+        },
         args.json,
     )
     return 0
@@ -409,8 +484,10 @@ def _agent_heartbeat(args: argparse.Namespace) -> int:
 
 def _agent_checkpoint(args: argparse.Namespace) -> int:
     workspace, profile, key = _session(args)
-    claim_id = _active_claim(workspace, profile, args.claim)
-    event = workspace.append(
+    claim_id = _active_claim(workspace, profile, args.claim, args)
+    event, remote = _append_participant(
+        args,
+        workspace,
         "checkpoint_published",
         {
             **_identity_payload(workspace, profile),
@@ -421,13 +498,15 @@ def _agent_checkpoint(args: argparse.Namespace) -> int:
         },
         key,
     )
-    _print({**_public_event(event), "claim_id": claim_id}, args.json)
+    _print({**_public_event(event), "claim_id": claim_id, **_remote_metadata(remote)}, args.json)
     return 0
 
 
 def _agent_chat(args: argparse.Namespace) -> int:
     workspace, profile, key = _session(args)
-    event = workspace.append(
+    event, remote = _append_participant(
+        args,
+        workspace,
         "message_posted",
         {
             **_identity_payload(workspace, profile),
@@ -437,27 +516,34 @@ def _agent_chat(args: argparse.Namespace) -> int:
         },
         key,
     )
-    _print({**_public_event(event), "coordination_only": True}, args.json)
+    _print(
+        {**_public_event(event), "coordination_only": True, **_remote_metadata(remote)},
+        args.json,
+    )
     return 0
 
 
 def _agent_release(args: argparse.Namespace) -> int:
     workspace, profile, key = _session(args)
-    claim_id = _active_claim(workspace, profile, args.claim)
-    event = workspace.append(
+    claim_id = _active_claim(workspace, profile, args.claim, args)
+    event, remote = _append_participant(
+        args,
+        workspace,
         "claim_released",
         {**_identity_payload(workspace, profile), "claim_id": claim_id, "reason": args.reason},
         key,
     )
-    _print({**_public_event(event), "claim_id": claim_id}, args.json)
+    _print({**_public_event(event), "claim_id": claim_id, **_remote_metadata(remote)}, args.json)
     return 0
 
 
 def _agent_handoff(args: argparse.Namespace) -> int:
     workspace, profile, key = _session(args)
-    claim_id = _active_claim(workspace, profile, args.claim)
+    claim_id = _active_claim(workspace, profile, args.claim, args)
     handoff_id = args.handoff_id or f"h-{secrets.token_hex(8)}"
-    event = workspace.append(
+    event, remote = _append_participant(
+        args,
+        workspace,
         "handoff_published",
         {
             **_identity_payload(workspace, profile),
@@ -475,7 +561,15 @@ def _agent_handoff(args: argparse.Namespace) -> int:
         },
         key,
     )
-    _print({**_public_event(event), "claim_id": claim_id, "handoff_id": handoff_id}, args.json)
+    _print(
+        {
+            **_public_event(event),
+            "claim_id": claim_id,
+            "handoff_id": handoff_id,
+            **_remote_metadata(remote),
+        },
+        args.json,
+    )
     return 0
 
 
@@ -483,7 +577,9 @@ def _submit_candidate(args: argparse.Namespace) -> int:
     workspace, profile, key = _session(args)
     candidate_id = args.candidate_id or f"candidate-{secrets.token_hex(8)}"
     artifact = _evidence(workspace.root, [args.artifact], [])[0]
-    event = workspace.append(
+    event, remote = _append_participant(
+        args,
+        workspace,
         "submission_candidate_published",
         {
             **_identity_payload(workspace, profile),
@@ -506,6 +602,7 @@ def _submit_candidate(args: argparse.Namespace) -> int:
             "local_candidate_only": True,
             "payment_authorized": False,
             "next": "A maintainer may separately record an already completed external submission.",
+            **_remote_metadata(remote),
         },
         args.json,
     )
@@ -513,12 +610,14 @@ def _submit_candidate(args: argparse.Namespace) -> int:
 
 
 def _status(args: argparse.Namespace) -> int:
-    _print(_workspace(args).state(args.at or _now()), args.json)
+    workspace = _workspace(args)
+    _print(_workspace_state(workspace, args), args.json)
     return 0
 
 
 def _agents(args: argparse.Namespace) -> int:
-    state = _workspace(args).state(args.at or _now())
+    workspace = _workspace(args)
+    state = _workspace_state(workspace, args)
     claims = {claim["claim_id"]: claim for claim in state["claims"]}
     result = []
     for session in state["sessions"]:
@@ -538,7 +637,8 @@ def _agents(args: argparse.Namespace) -> int:
 
 
 def _chat(args: argparse.Namespace) -> int:
-    state = _workspace(args).state(args.at or _now())
+    workspace = _workspace(args)
+    state = _workspace_state(workspace, args)
     _print(
         {
             "problem_id": state["problem_id"],
@@ -551,7 +651,8 @@ def _chat(args: argparse.Namespace) -> int:
 
 
 def _history(args: argparse.Namespace) -> int:
-    state = _workspace(args).state(args.at or _now())
+    workspace = _workspace(args)
+    state = _workspace_state(workspace, args)
     _print(
         {
             "problem_id": state["problem_id"],
@@ -570,7 +671,7 @@ def _history(args: argparse.Namespace) -> int:
 
 def _brief(args: argparse.Namespace) -> int:
     workspace = _workspace(args)
-    state = workspace.state(args.at or _now())
+    state = _workspace_state(workspace, args)
     problem = workspace.problem
     task = problem["task"]
     active = [claim for claim in state["claims"] if claim["status"] in {"active", "stale"}]
@@ -847,6 +948,58 @@ def _maintainer_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _clerk_serve(args: argparse.Namespace) -> int:
+    if not 0 <= args.port <= 65535:
+        raise ProtocolError("clerk port must be between 0 and 65535")
+    loopback = {"127.0.0.1", "::1", "localhost"}
+    if args.host not in loopback and not args.allow_insecure_bind:
+        raise ProtocolError(
+            "non-loopback bind requires --allow-insecure-bind and a separate TLS proxy"
+        )
+    workspace = _workspace(args)
+    server = build_server(
+        workspace,
+        load_maintainer_key(workspace),
+        host=args.host,
+        port=args.port,
+    )
+    host, port = server.server_address[:2]
+    _print(
+        {
+            "listening": f"http://{host}:{port}",
+            "problem_id": workspace.problem["problem_id"],
+            "mode": "trusted-clerk-prototype",
+            "tls_built_in": False,
+            "participant_events_only": True,
+        },
+        args.json,
+    )
+    sys.stdout.flush()
+    try:
+        server.serve_forever(poll_interval=0.25)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+def _remote_recover(args: argparse.Namespace) -> int:
+    workspace = _workspace(args)
+    server = _server(args, required=True)
+    result = RemoteClient(workspace, server).recover(args.request_id)
+    _print(
+        {
+            **_public_event(result["event"]),
+            **_remote_metadata(result),
+            "created": result["created"],
+            "recovered": True,
+        },
+        args.json,
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="boule")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -936,11 +1089,18 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--json", action="store_true", help="emit compact JSON")
     init.set_defaults(handler=_init_problem)
 
+    def server_argument(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--server",
+            help="trusted clerk origin; defaults to BOULE_SERVER (HTTPS except loopback)",
+        )
+
     def read_command(name: str, help_text: str, handler: Any) -> argparse.ArgumentParser:
         command = subparsers.add_parser(name, help=help_text)
         command.add_argument("problem", help="initialized problem directory")
         command.add_argument("--at", help="ISO-8601 UTC observation time")
         command.add_argument("--json", action="store_true", help="emit compact JSON")
+        server_argument(command)
         command.set_defaults(handler=handler)
         return command
 
@@ -955,6 +1115,7 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("problem", help="initialized problem directory")
     brief.add_argument("--session", help="local session id to mention in the brief")
     brief.add_argument("--at", help="ISO-8601 UTC observation time")
+    server_argument(brief)
     brief.set_defaults(handler=_brief)
 
     submit = subparsers.add_parser(
@@ -977,6 +1138,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--reproduce", required=True, help="exact local verification command")
     submit.add_argument("--limitations", default="No additional limitations declared.")
     submit.add_argument("--json", action="store_true", help="emit compact JSON")
+    server_argument(submit)
     submit.set_defaults(handler=_submit_candidate)
 
     agent = subparsers.add_parser("agent", help="append signed participant activity")
@@ -989,6 +1151,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--label", help="optional descriptive session label")
     start.add_argument("--hours", type=float, default=24.0, help="session lifetime")
     start.add_argument("--json", action="store_true", help="emit compact JSON")
+    server_argument(start)
     start.set_defaults(handler=_agent_start)
 
     def participant_command(name: str, help_text: str, handler: Any) -> argparse.ArgumentParser:
@@ -996,6 +1159,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("problem", help="initialized problem directory")
         command.add_argument("--session", help="session id; defaults to BOULE_SESSION")
         command.add_argument("--json", action="store_true", help="emit compact JSON")
+        server_argument(command)
         command.set_defaults(handler=handler)
         return command
 
@@ -1162,6 +1326,33 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--json", action="store_true", help="emit compact JSON")
     advisor_arguments(watch)
     watch.set_defaults(handler=_maintainer_watch)
+
+    clerk = subparsers.add_parser("clerk", help="operate the trusted append clerk")
+    clerk_commands = clerk.add_subparsers(dest="clerk_command", required=True)
+    serve = clerk_commands.add_parser(
+        "serve", help="serve one case append API; put TLS and rate limits in a proxy"
+    )
+    serve.add_argument("problem", help="canonical initialized problem directory")
+    serve.add_argument("--host", default="127.0.0.1", help="listen address")
+    serve.add_argument("--port", type=int, default=8787, help="listen port; 0 chooses one")
+    serve.add_argument(
+        "--allow-insecure-bind",
+        action="store_true",
+        help="explicitly allow a non-loopback plaintext bind for controlled environments",
+    )
+    serve.add_argument("--json", action="store_true", help="emit compact startup JSON")
+    serve.set_defaults(handler=_clerk_serve)
+
+    remote = subparsers.add_parser("remote", help="recover ambiguous remote appends")
+    remote_commands = remote.add_subparsers(dest="remote_command", required=True)
+    recover = remote_commands.add_parser(
+        "recover", help="query or safely replay one signed outbox request"
+    )
+    recover.add_argument("problem", help="local problem clone containing the outbox")
+    recover.add_argument("request_id", help="UUID printed by the ambiguous append")
+    server_argument(recover)
+    recover.add_argument("--json", action="store_true", help="emit compact JSON")
+    recover.set_defaults(handler=_remote_recover)
     return parser
 
 

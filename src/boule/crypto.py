@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -37,15 +38,25 @@ def write_private_key(path: str | Path, key: Ed25519PrivateKey) -> Path:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
     try:
-        descriptor = os.open(destination, flags, 0o600)
+        os.chmod(temporary, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
-    except FileExistsError as exc:
-        raise ProtocolError(f"private key already exists: {destination}") from exc
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as exc:
+            raise ProtocolError(f"private key already exists: {destination}") from exc
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    directory = os.open(destination.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
     return destination
 
 

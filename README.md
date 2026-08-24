@@ -21,13 +21,15 @@ The repository is a working protocol skeleton, not a deployed subnet, escrow,
 or decentralized court.
 
 The workspace extension focuses on asynchronous, durable research handoffs
-between many short-lived agent sessions. Its v0.4 CLI imports a pinned
+between many short-lived agent sessions. Its v0.5 CLI imports a pinned
 Conjectures task, signs participant events, exposes expiring work claims and
 problem chat, seals local solution candidates, records evidence-backed external
-review observations, and runs a deterministic maintainer projection. An optional
-low-cost Codex advisor can suggest operational actions, but cannot curate
-mathematics or decide credit. See [Boule workspace protocol
-v0.4](docs/workspace-protocol-v0.4.md).
+review observations, and lets independent clones send participant-signed
+envelopes to one canonical trusted clerk. The clerk assigns order and time,
+durably embeds a signed receipt, and supports exact recovery after an ambiguous
+network failure. An optional low-cost Codex advisor can suggest operational
+actions, but cannot curate mathematics or decide credit. See [Boule workspace
+protocol v0.5](docs/workspace-protocol-v0.5.md).
 
 ## Why Boule
 
@@ -110,7 +112,7 @@ partial award reopens research and injects the recorded reason and next action
 into `boule brief`; approval first becomes `ACCEPTANCE_RECORDED`, and only the
 separate local finalization changes the case to `SOLVED`. Reward eligibility is
 recorded separately, while payout is intentionally outside this command flow.
-In v0.4 these external facts are trusted-clerk observations of a canonical
+In v0.5 these external facts are trusted-clerk observations of a canonical
 public page, not cryptographically authenticated Conjectures attestations.
 
 Session private keys stay below the ignored `.boule/private/` directory with
@@ -134,15 +136,53 @@ advisor receives only a compact operational brief, runs read-only with low
 reasoning, and is called once per changed state digest. Its output is explicitly
 advisory and cannot modify signed events.
 
+## Use one canonical clerk from independent clones
+
+Start the built-in single-case clerk on the canonical machine:
+
+```bash
+uv run boule clerk serve PROBLEM --host 127.0.0.1 --port 8787
+```
+
+Each clone keeps its controller/session private keys locally and points normal
+participant commands at that clerk:
+
+```bash
+export BOULE_SERVER=http://127.0.0.1:8787
+uv run boule status PROBLEM
+uv run boule agent start PROBLEM \
+  --participant alice --controller alice --label "Codex session A"
+uv run boule agent claim PROBLEM --session SESSION_ID \
+  --route "close k=5 curve" --success-gate "complete certificate" \
+  --falsifier "admissible integral point"
+```
+
+Before every mutation the client reads a clerk-signed head, signs an immutable
+envelope locally, and saves it under the ignored private outbox. A successful
+response is verified against the pinned clerk key and stored with its signed
+receipt. If the outcome is ambiguous, the error prints the stable request UUID;
+recover it without creating a duplicate:
+
+```bash
+uv run boule remote recover PROBLEM REQUEST_UUID
+```
+
+Concurrent clients that signed the same old head are safely serialized: one is
+accepted and the others refresh, re-sign, and retry. Maintainer, external-review,
+finalization, wallet, and payment commands are not exposed by the append API.
+The bundled HTTP server is a bounded, loopback-first prototype. Remote operation
+requires a TLS reverse proxy with authentication/rate limits; it is not a
+multi-node or trustless service.
+
 For a public community, keep this tooling in one repository and normally give
 each problem its own repository. That isolates branches, artifacts, access
 policy, and history while a separate registry can list all cases. A local root
 may contain many case directories before they are published.
 
-The current event writer is single-clerk. Concurrent sessions may share one
-canonical workspace/service, as the tests do, but two independent clones cannot
-append competing next events and merge them. A service-backed receipt inbox is
-still required for distributed public contribution.
+The event writer remains a single trusted clerk, now accessible through the
+v0.5 append API. It serializes independent clones but does not provide high
+availability, independent timestamp consensus, censorship resistance, or
+external root replication. Those remain later deployment milestones.
 
 ## Try the asynchronous community mock
 

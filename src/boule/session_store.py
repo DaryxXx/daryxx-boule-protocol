@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import secrets
+import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from .crypto import (
     write_private_key,
 )
 from .errors import ProtocolError
+from .remote_protocol import strict_json_bytes
 from .workspace import Workspace
 
 IDENTIFIER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,63})\Z")
@@ -35,14 +37,25 @@ def utc_now() -> str:
 
 
 def _write_private_json(path: Path, value: dict[str, Any]) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.chmod(temporary, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(canonical_bytes(value) + b"\n")
             handle.flush()
             os.fsync(handle.fileno())
-    except FileExistsError as exc:
-        raise ProtocolError(f"private profile already exists: {path}") from exc
+        try:
+            os.link(temporary, path)
+        except FileExistsError as exc:
+            raise ProtocolError(f"private profile already exists: {path}") from exc
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 class SessionStore:
@@ -67,6 +80,7 @@ class SessionStore:
         controller_id: str,
         label: str | None,
         not_after: str,
+        appender: Callable[[str, dict[str, Any], Any], Any] | None = None,
     ) -> dict[str, Any]:
         participant_id = _identifier(participant_id, "participant")
         controller_id = _identifier(controller_id, "controller")
@@ -108,10 +122,13 @@ class SessionStore:
                 for key, value in profile.items()
                 if key != "schema" and not (key == "label" and value is None)
             }
-            self.workspace.append("session_started", payload, controller_key)
+            (appender or self.workspace.append)("session_started", payload, controller_key)
         except BaseException:
-            profile_path.unlink(missing_ok=True)
-            session_path.unlink(missing_ok=True)
+            if appender is None:
+                profile_path.unlink(missing_ok=True)
+                session_path.unlink(missing_ok=True)
+            # An external appender may have committed before any transport error
+            # or interruption reached us. Preserve keys so recovery remains possible.
             raise
         return {**profile, "profile_path": str(profile_path)}
 
@@ -120,8 +137,8 @@ class SessionStore:
         profile_path = self.profiles / f"{session_id}.json"
         key_path = self.sessions / f"{session_id}.pem"
         try:
-            profile = json.loads(profile_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            profile = strict_json_bytes(profile_path.read_bytes())
+        except (OSError, ProtocolError) as exc:
             raise ProtocolError(f"cannot load local session profile: {session_id}") from exc
         required = {
             "schema",
