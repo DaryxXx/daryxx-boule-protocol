@@ -263,7 +263,13 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
                         "session_id": "session-1",
                         "label": "Proof route",
                         "status": "active",
-                    }
+                    },
+                    {
+                        "participant_id": "agent-finished",
+                        "session_id": "session-finished",
+                        "label": "Completed route",
+                        "status": "active",
+                    },
                 ],
                 "claims": [
                     {

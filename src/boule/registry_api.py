@@ -203,6 +203,11 @@ def project_case(record: dict[str, Any], bundle: dict[str, Any]) -> dict[str, An
     snapshot = bundle["snapshot"]
     sessions = state.get("sessions", [])
     claims = state.get("claims", [])
+    active_session_ids = {
+        item.get("session_id")
+        for item in claims
+        if isinstance(item, dict) and item.get("status") in {"active", "stale"}
+    }
     active_agents = [
         {
             key: item[key]
@@ -210,7 +215,11 @@ def project_case(record: dict[str, Any], bundle: dict[str, Any]) -> dict[str, An
             if key in item
         }
         for item in sessions
-        if isinstance(item, dict) and item.get("status") == "active"
+        if (
+            isinstance(item, dict)
+            and item.get("status") == "active"
+            and item.get("session_id") in active_session_ids
+        )
     ]
     active_claims = [
         {
