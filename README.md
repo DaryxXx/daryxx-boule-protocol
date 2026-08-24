@@ -59,6 +59,10 @@ build a tool, verify, or integrate. It forbids submission and spending.
 The fixture exercises:
 
 - three delegated sessions resumed from durable JSONL rather than private chat;
+- a signed proposal → critique → response → chair exchange whose messages remain
+  coordination and never become ballot evidence by themselves;
+- disclosure-aware chat: private methods stay behind authorized evidence references
+  or digests instead of being copied into a public message;
 - expiring exclusive or deliberate-parallel route leases;
 - signed `ADVANCE`, `BLOCKED`, and dependency-linked handoffs;
 - commitment/reveal, inspectability, session revocation, and frontier curation;

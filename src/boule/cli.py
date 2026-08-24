@@ -87,12 +87,16 @@ def _community_demo(args: argparse.Namespace) -> int:
     (output / "join-brief.md").write_text(render_join_brief_markdown(community), encoding="utf-8")
     (output / "agent-prompt.md").write_text(render_agent_prompt(community), encoding="utf-8")
     with (output / "chat.jsonl").open("x", encoding="utf-8", newline="\n") as handle:
-        for message_id, message in sorted(community.state.messages.items()):
+        for message_id, message in community.state.messages.items():
+            payload = message["payload"]
+            session = community.state.sessions[payload["session_id"]]
             handle.write(
                 canonical_bytes(
                     {
                         "message_id": message_id,
-                        "payload": message["payload"],
+                        "participant_id": session.participant_id,
+                        "received_at": message["received_at"],
+                        "payload": payload,
                         "entry_hash": message["entry_hash"],
                     }
                 ).decode("utf-8")

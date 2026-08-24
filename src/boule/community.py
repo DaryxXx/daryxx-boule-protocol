@@ -779,7 +779,11 @@ class CommunityState:
             _text(payload["topic"], "message.topic", maximum=128)
             _text(payload["body"], "message.body", maximum=4_000)
             _string_list(payload["references"], "message.references")
-            self.messages[message_id] = {"payload": payload, "entry_hash": entry["entry_hash"]}
+            self.messages[message_id] = {
+                "payload": payload,
+                "entry_hash": entry["entry_hash"],
+                "received_at": received_at,
+            }
             return
 
         if kind == "route_claimed":
