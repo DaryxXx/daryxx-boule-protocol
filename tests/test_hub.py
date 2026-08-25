@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import shutil
+import subprocess
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,12 +12,19 @@ from urllib.request import urlopen
 import pytest
 
 from boule.clerk_api import build_server as build_clerk_server
+from boule.cli import main
 from boule.crypto import generate_private_key, public_key_text, verify_object
 from boule.errors import ProtocolError
 from boule.hub import DEFAULT_CASE_CONFIG, Hub
 from boule.problem_import import FetchResponse
-from boule.provisioner import MARKER_PATH, GitHubAppRepositoryProvider
+from boule.provisioner import (
+    MARKER_PATH,
+    GitHubAppRepositoryProvider,
+    LocalRepositoryProvider,
+    Repository,
+)
 from boule.remote_protocol import verify_snapshot
+from boule.repository_migration import GitHubRepositoryInspection
 from boule.session_store import load_maintainer_key
 
 URL = "https://conjectures.io/problems/erdos686-erdos-686-variants-four"
@@ -260,3 +268,157 @@ def test_activate_uses_verified_bundle_from_a_real_local_clerk(tmp_path: Path) -
     assert live["clerk_url"] == "https://clerk.example/cases/erdos686"
     assert live["event_count"] == 0
     assert live["head_event_hash"] is None
+
+
+def test_cli_migrates_verified_local_repository_and_preserves_original_marker_identity(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    hub = Hub.initialize(tmp_path / "hub")
+    proposal, _ = hub.propose(URL, fetcher=fetch_problem)
+    case_id = str(proposal["case_id"])
+    hub.admit(case_id, fetcher=fetch_problem)
+    provider = LocalRepositoryProvider(
+        hub.root / "repositories", public_base_url="https://staging.example/git"
+    )
+    provisioned = hub.provision(case_id, provider, fetcher=fetch_problem)
+    hub.activate(
+        case_id,
+        "https://clerk.example/cases/erdos686",
+        fetcher=lambda _: {"snapshot": {"head_event_hash": None, "event_count": 0}},
+    )
+    original = hub.registry.problem(case_id)
+    assert isinstance(original["repository_id"], str)
+    destination_path = tmp_path / "destination.git"
+    source = provider.ensure_repository(provisioned.repository_name)
+    assert source.local_path is not None
+    advanced = tmp_path / "advanced-main"
+    subprocess.run(
+        ["git", "clone", str(source.local_path), str(advanced)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "-C", str(advanced), "config", "user.name", "Test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(advanced), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(advanced), "rm", MARKER_PATH], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(advanced), "commit", "-m", "advance main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(advanced), "push", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "clone", "--mirror", str(source.local_path), str(destination_path)],
+        check=True,
+        capture_output=True,
+    )
+    destination_url = f"https://github.com/BouleProtocol/{provisioned.repository_name}"
+    destination_ssh = f"git@github.com:BouleProtocol/{provisioned.repository_name}.git"
+    subprocess.run(
+        ["git", "--git-dir", str(destination_path), "remote", "set-url", "origin", destination_ssh],
+        check=True,
+        capture_output=True,
+    )
+    destination = Repository(
+        provisioned.repository_name,
+        destination_url,
+        destination_path,
+        False,
+        202,
+        "R_kgDOBoule202",
+    )
+
+    def final_revalidate() -> None:
+        evidence_root = hub.control / "private" / "repository-migrations"
+        assert len(list(evidence_root.glob(f"{case_id}-*.json"))) == 1
+
+    expected_head = str(hub.registry.head)
+    count_before_revalidation = hub.registry.count
+
+    def reject_after_evidence() -> None:
+        final_revalidate()
+        raise ProtocolError("repository changed during final revalidation")
+
+    with pytest.raises(ProtocolError, match="final revalidation"):
+        hub.migrate_repository(
+            case_id,
+            expected_head,
+            destination,
+            revalidate=reject_after_evidence,
+            fetcher=lambda _: {"snapshot": {"head_event_hash": None, "event_count": 0}},
+        )
+    assert Hub(hub.root).registry.count == count_before_revalidation
+    assert Hub(hub.root).registry.head == expected_head
+
+    @contextmanager
+    def inspected(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        assert args == ("BouleProtocol", provisioned.repository_name)
+        assert kwargs == {"expected_account": "DaryxXx", "private": True}
+        yield GitHubRepositoryInspection(destination, final_revalidate)
+
+    monkeypatch.setattr("boule.cli.inspect_github_repository", inspected)
+    monkeypatch.setattr(
+        "boule.hub.fetch_case_state",
+        lambda _: {"snapshot": {"head_event_hash": None, "event_count": 0}},
+    )
+    command = [
+        "registry",
+        "migrate-repository",
+        str(hub.root),
+        case_id,
+        "--expected-registry-head",
+        expected_head,
+        "--github-org",
+        "BouleProtocol",
+        "--github-account",
+        "DaryxXx",
+        "--json",
+    ]
+
+    assert main(command) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["migration_recorded"] is True
+    assert result["repository_verified"] is True
+    assert result["original_marker_bytes_verified"] is True
+    assert result["case"]["repository_id"] == 202
+    assert result["case"]["marker_repository_id"] == original["repository_id"]
+    evidence_files = list(
+        (hub.control / "private" / "repository-migrations").glob(f"{case_id}-*.json")
+    )
+    assert len(evidence_files) == 1
+    private_evidence = evidence_files[0]
+    assert private_evidence.stat().st_mode & 0o777 == 0o600
+    evidence = json.loads(private_evidence.read_text(encoding="utf-8"))
+    assert evidence["ref_manifest"]["schema"] == "boule-git-ref-manifest/0.1"
+    assert evidence["ref_manifest_sha256"] == result["case"]["repository_migrations"][0][
+        "ref_manifest_sha256"
+    ]
+
+    migrated_count = Hub(hub.root).registry.count
+    main_commit = str(result["case"]["repository_commit"])
+    subprocess.run(
+        [
+            "git",
+            "--git-dir",
+            str(destination_path),
+            "update-ref",
+            "refs/heads/post-migration-work",
+            main_commit,
+        ],
+        check=True,
+    )
+    assert main(command) == 0
+    retried = json.loads(capsys.readouterr().out)
+    assert retried["migration_recorded"] is False
+    assert Hub(hub.root).registry.count == migrated_count
+
+    reopened = Hub(hub.root)
+    assert reopened.case_workspace(case_id).config["maintainer_key"] == original["clerk_key"]

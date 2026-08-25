@@ -12,8 +12,9 @@ import os
 import re
 import tempfile
 import threading
+from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from .crypto import load_public_key, public_key_text, sign_object, verify_object
 from .errors import ProtocolError
 from .model import CASE_ID_RE, parse_time
 from .remote_protocol import strict_json_bytes
+from .repository_migration import REF_MANIFEST_SCHEMA, validate_ref_manifest
 
 REGISTRY_SCHEMA = "boule-problem-registry/0.6"
 SNAPSHOT_SCHEMA = "boule-problem-registry-snapshot/0.6"
@@ -42,6 +44,25 @@ ENTRY_FIELDS = {
 }
 EVENT_FIELDS = {"kind", "payload"}
 PROPOSAL_FIELDS = {"case_id", "problem"}
+REPOSITORY_MIGRATION_FIELDS = {
+    "case_id",
+    "marker_digest",
+    "from_repo_url",
+    "from_repository_commit",
+    "from_repository_id",
+    "from_repository_node_id",
+    "to_repo_url",
+    "to_repository_commit",
+    "to_repository_id",
+    "to_repository_node_id",
+    "case_head_event_hash",
+    "case_event_count",
+    "marker_blob_sha256",
+    "ref_manifest_schema",
+    "ref_manifest_count",
+    "ref_manifest_main",
+    "ref_manifest_sha256",
+}
 STATES = frozenset({"PROPOSED", "ADMITTED", "PROVISIONING", "LIVE", "PROVISION_FAILED"})
 MAX_RETRIES = 3
 MAX_CASES = 10_000
@@ -307,6 +328,9 @@ class _Record:
     repository_commit: str | None = None
     repository_id: int | str | None = None
     repository_node_id: str | None = None
+    marker_repository_id: int | str | None = None
+    marker_repository_node_id: str | None = None
+    repository_migrations: list[dict[str, Any]] = field(default_factory=list)
     head_event_hash: str | None = None
     event_count: int = 0
     updated_at: str | None = None
@@ -452,6 +476,8 @@ class Registry:
     def _replay(self) -> dict[str, _Record]:
         records: dict[str, _Record] = {}
         commitments: dict[str, str] = {}
+        repository_ids: dict[int | str, str] = {}
+        repository_nodes: dict[str, str] = {}
         for entry in self._entries[1:]:
             event = entry["event"]
             kind = event["kind"]
@@ -486,6 +512,7 @@ class Registry:
                     "head_event_hash",
                     "event_count",
                 },
+                REPOSITORY_MIGRATION_FIELDS,
             ):
                 raise ProtocolError("registry transition has invalid fields")
             case_id = _case_id(payload.get("case_id"))
@@ -532,6 +559,18 @@ class Registry:
                 record.repository_id, record.repository_node_id = _repository_identity(
                     payload["repository_id"], payload["repository_node_id"]
                 )
+                if record.repository_id in repository_ids:
+                    raise ProtocolError("repository identity is already bound to another case")
+                if (
+                    record.repository_node_id is not None
+                    and record.repository_node_id in repository_nodes
+                ):
+                    raise ProtocolError("repository node identity is already bound")
+                repository_ids[record.repository_id] = case_id
+                if record.repository_node_id is not None:
+                    repository_nodes[record.repository_node_id] = case_id
+                record.marker_repository_id = record.repository_id
+                record.marker_repository_node_id = record.repository_node_id
                 record.updated_at = entry["received_at"]
             elif (
                 kind == "live"
@@ -551,6 +590,93 @@ class Registry:
                     payload["head_event_hash"], payload["event_count"]
                 )
                 record.status = "LIVE"
+                record.updated_at = entry["received_at"]
+            elif (
+                kind == "repository_migrated"
+                and record.status == "LIVE"
+                and set(payload) == REPOSITORY_MIGRATION_FIELDS
+            ):
+                if record.repository_migrations:
+                    raise ProtocolError("case repository has already been migrated")
+                if payload["marker_digest"] != record.marker_digest:
+                    raise ProtocolError("repository migration marker digest does not match")
+                from_repository_id, from_repository_node_id = _repository_identity(
+                    payload["from_repository_id"], payload["from_repository_node_id"]
+                )
+                from_repo_url = _public_url(payload["from_repo_url"], "from_repo_url")
+                from_commit = payload["from_repository_commit"]
+                if not isinstance(from_commit, str) or re.fullmatch(
+                    r"[0-9a-f]{40,64}", from_commit
+                ) is None:
+                    raise ProtocolError("repository migration source commit is invalid")
+                if (
+                    from_repository_id != record.repository_id
+                    or from_repository_node_id != record.repository_node_id
+                    or from_repo_url != record.repo_url
+                    or from_commit != record.repository_commit
+                ):
+                    raise ProtocolError("repository migration source does not match current state")
+                if (
+                    not isinstance(from_repository_id, str)
+                    or not from_repository_id.startswith("local:")
+                    or from_repository_node_id is not None
+                ):
+                    raise ProtocolError("repository migration source is not staging-local")
+                to_repository_id, to_repository_node_id = _repository_identity(
+                    payload["to_repository_id"], payload["to_repository_node_id"]
+                )
+                if not isinstance(to_repository_id, int) or to_repository_node_id is None:
+                    raise ProtocolError("repository migration destination is not GitHub")
+                to_repo_url = _public_url(payload["to_repo_url"], "to_repo_url")
+                to_commit = payload["to_repository_commit"]
+                if not isinstance(to_commit, str) or re.fullmatch(
+                    r"[0-9a-f]{40,64}", to_commit
+                ) is None:
+                    raise ProtocolError("repository migration destination commit is invalid")
+                marker_blob = payload["marker_blob_sha256"]
+                if not isinstance(marker_blob, str) or SHA256_RE.fullmatch(marker_blob) is None:
+                    raise ProtocolError("repository migration marker blob digest is invalid")
+                if payload["ref_manifest_schema"] != REF_MANIFEST_SCHEMA:
+                    raise ProtocolError("repository migration ref manifest is unsupported")
+                ref_count = payload["ref_manifest_count"]
+                if (
+                    isinstance(ref_count, bool)
+                    or not isinstance(ref_count, int)
+                    or not 1 <= ref_count <= 256
+                ):
+                    raise ProtocolError("repository migration ref count is invalid")
+                ref_manifest = payload["ref_manifest_sha256"]
+                if not isinstance(ref_manifest, str) or SHA256_RE.fullmatch(ref_manifest) is None:
+                    raise ProtocolError("repository migration ref manifest digest is invalid")
+                if payload["ref_manifest_main"] != to_commit:
+                    raise ProtocolError("repository migration commit is not the manifest main")
+                case_head, case_count = _case_evidence(
+                    payload["case_head_event_hash"], payload["case_event_count"]
+                )
+                if case_count < record.event_count or (
+                    case_count == record.event_count and case_head != record.head_event_hash
+                ):
+                    raise ProtocolError("repository migration case anchor is stale or conflicting")
+                if to_repository_id in repository_ids:
+                    raise ProtocolError("repository migration destination is already bound")
+                if to_repository_node_id in repository_nodes:
+                    raise ProtocolError("repository migration destination node is already bound")
+                repository_ids[to_repository_id] = case_id
+                repository_nodes[to_repository_node_id] = case_id
+                record.repository_migrations.append(
+                    {
+                        **payload,
+                        "registry_seq": entry["seq"],
+                        "registry_entry_hash": entry["entry_hash"],
+                        "received_at": entry["received_at"],
+                    }
+                )
+                record.repo_url = to_repo_url
+                record.repository_commit = to_commit
+                record.repository_id = to_repository_id
+                record.repository_node_id = to_repository_node_id
+                record.head_event_hash = case_head
+                record.event_count = case_count
                 record.updated_at = entry["received_at"]
             elif (
                 kind == "provision_failed"
@@ -620,7 +746,15 @@ class Registry:
             previous_time = received
         self._replay()
 
-    def _append(self, kind: str, payload: dict[str, Any], received_at: str | None = None) -> None:
+    def _append(
+        self,
+        kind: str,
+        payload: dict[str, Any],
+        received_at: str | None = None,
+        *,
+        expected_head: str | None = None,
+        idempotent: Callable[[Registry], bool] | None = None,
+    ) -> bool:
         if self._clerk_private_key is None or self._path is None:
             raise ProtocolError("registry is read-only")
         with self._write_lock():
@@ -629,6 +763,10 @@ class Registry:
                 raise ProtocolError("wrong registry clerk key")
             self._require_extension(latest)
             self._entries = list(latest.entries)
+            if idempotent is not None and idempotent(latest):
+                return False
+            if expected_head is not None and latest.head != expected_head:
+                raise ProtocolError("registry head changed before the requested transition")
             timestamp = received_at or _now()
             observed = parse_time(timestamp, "registry.received_at")
             previous_time = parse_time(
@@ -654,6 +792,7 @@ class Registry:
             except BaseException:
                 self._entries.pop()
                 raise
+            return True
 
     def record_proposal(
         self, proposal: dict[str, Any], received_at: str | None = None
@@ -719,6 +858,133 @@ class Registry:
         )
         return self.problem(case_id)
 
+    def migrate_repository(
+        self,
+        case_id: str,
+        expected_registry_head: str,
+        repo_url: str,
+        repository_commit: str,
+        repository_id: int,
+        repository_node_id: str,
+        marker_blob_sha256: str,
+        ref_manifest: dict[str, Any],
+        ref_manifest_sha256: str,
+        case_head_event_hash: str | None,
+        case_event_count: int,
+        received_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a signed repository-identity transition for one LIVE case.
+
+        The original case marker remains immutable. The transition binds its
+        digest, the exact current repository identity, the replacement
+        identity, and an independently computed manifest of every mirrored
+        Git ref.
+        """
+        case_id = _case_id(case_id)
+        record = self._replay().get(case_id)
+        if record is None:
+            raise ProtocolError("registry transition refers to an unknown case")
+        if record.status != "LIVE":
+            raise ProtocolError("only a LIVE case repository may be migrated")
+        if (
+            record.repo_url is None
+            or record.marker_digest is None
+            or record.repository_commit is None
+            or record.repository_id is None
+        ):
+            raise ProtocolError("LIVE case repository identity is incomplete")
+        if (
+            not isinstance(expected_registry_head, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_registry_head) is None
+        ):
+            raise ProtocolError("expected registry head is invalid")
+        repository_id, repository_node_id = _repository_identity(repository_id, repository_node_id)
+        if not isinstance(repository_id, int) or repository_node_id is None:
+            raise ProtocolError("repository migration destination is not GitHub")
+        repo_url = _public_url(repo_url, "repo_url")
+        if not isinstance(repository_commit, str) or re.fullmatch(
+            r"[0-9a-f]{40,64}", repository_commit
+        ) is None:
+            raise ProtocolError("repository commit is invalid")
+        if not isinstance(marker_blob_sha256, str) or SHA256_RE.fullmatch(
+            marker_blob_sha256
+        ) is None:
+            raise ProtocolError("repository marker blob digest is invalid")
+        ref_manifest = validate_ref_manifest(ref_manifest)
+        expected_manifest_digest = "sha256:" + digest_object(ref_manifest)
+        if (
+            not isinstance(ref_manifest_sha256, str)
+            or SHA256_RE.fullmatch(ref_manifest_sha256) is None
+            or ref_manifest_sha256 != expected_manifest_digest
+        ):
+            raise ProtocolError("repository ref manifest digest is invalid")
+        main_commit = next(
+            item["object_id"]
+            for item in ref_manifest["refs"]
+            if item["name"] == "refs/heads/main"
+        )
+        if repository_commit != main_commit:
+            raise ProtocolError("repository commit is not the ref manifest main")
+        case_head_event_hash, case_event_count = _case_evidence(
+            case_head_event_hash, case_event_count
+        )
+        if case_event_count < record.event_count or (
+            case_event_count == record.event_count
+            and case_head_event_hash != record.head_event_hash
+        ):
+            raise ProtocolError("repository migration case anchor is stale or conflicting")
+
+        destination = {
+            "to_repo_url": repo_url,
+            "to_repository_commit": repository_commit,
+            "to_repository_id": repository_id,
+            "to_repository_node_id": repository_node_id,
+            "marker_blob_sha256": marker_blob_sha256,
+            "ref_manifest_schema": REF_MANIFEST_SCHEMA,
+            "ref_manifest_count": len(ref_manifest["refs"]),
+            "ref_manifest_main": repository_commit,
+            "ref_manifest_sha256": ref_manifest_sha256,
+        }
+        if record.repository_migrations:
+            previous = record.repository_migrations[-1]
+            if not all(previous.get(key) == value for key, value in destination.items()):
+                raise ProtocolError("case repository has already been migrated")
+            payload = {key: previous[key] for key in REPOSITORY_MIGRATION_FIELDS}
+        else:
+            if not isinstance(record.repository_id, str) or record.repository_node_id is not None:
+                raise ProtocolError("repository migration source is not staging-local")
+            payload = {
+                "case_id": case_id,
+                "marker_digest": record.marker_digest,
+                "from_repo_url": record.repo_url,
+                "from_repository_commit": record.repository_commit,
+                "from_repository_id": record.repository_id,
+                "from_repository_node_id": record.repository_node_id,
+                **destination,
+                "case_head_event_hash": case_head_event_hash,
+                "case_event_count": case_event_count,
+            }
+
+        def already_recorded(latest: Registry) -> bool:
+            current = latest._replay().get(case_id)
+            if current is None:
+                raise ProtocolError("registry transition refers to an unknown case")
+            if not current.repository_migrations:
+                return False
+            transition = current.repository_migrations[-1]
+            if all(transition.get(key) == value for key, value in destination.items()):
+                return True
+            raise ProtocolError("case repository has already been migrated")
+
+        self._append(
+            "repository_migrated",
+            payload,
+            received_at,
+            expected_head=expected_registry_head,
+            idempotent=already_recorded,
+        )
+        return self.problem(case_id)
+
     def mark_provision_failed(
         self, case_id: str, error: str, received_at: str | None = None
     ) -> dict[str, Any]:
@@ -752,6 +1018,9 @@ class Registry:
             "repository_commit": record.repository_commit,
             "repository_id": record.repository_id,
             "repository_node_id": record.repository_node_id,
+            "marker_repository_id": record.marker_repository_id,
+            "marker_repository_node_id": record.marker_repository_node_id,
+            "repository_migrations": [dict(item) for item in record.repository_migrations],
             "status": record.status,
             "head_event_hash": record.head_event_hash,
             "event_count": record.event_count,

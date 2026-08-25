@@ -24,6 +24,7 @@ from .provisioner import CaseProvisioner, ProvisionResult, Repository, Repositor
 from .registry import Registry
 from .registry_api import fetch_case_state
 from .remote_protocol import strict_json_bytes
+from .repository_migration import verify_local_to_github_mirror
 from .workspace import Workspace
 
 HUB_SCHEMA = "boule-hub/0.6"
@@ -362,12 +363,12 @@ class Hub:
         workspace = Workspace(self._canonical_workspace_path(record))
         if self._problem_projection(workspace.problem) != self._record_projection(record):
             raise ProtocolError("case workspace problem does not match the registry")
-        repository_id = record["repository_id"]
-        repository_node_id = record["repository_node_id"]
+        repository_id = record["marker_repository_id"]
+        repository_node_id = record["marker_repository_node_id"]
         if isinstance(repository_id, bool) or not isinstance(repository_id, (int, str)):
-            raise ProtocolError("case workspace has an invalid repository identity")
+            raise ProtocolError("case workspace has an invalid marker repository identity")
         if repository_node_id is not None and not isinstance(repository_node_id, str):
-            raise ProtocolError("case workspace has an invalid repository identity")
+            raise ProtocolError("case workspace has an invalid marker repository identity")
         identity = CaseProvisioner._marker_identity(
             case_id,
             workspace,
@@ -388,6 +389,73 @@ class Hub:
         ):
             raise ProtocolError("case workspace marker identity does not match the registry")
         return workspace
+
+    def migrate_repository(
+        self,
+        case_id: str,
+        expected_registry_head: str,
+        destination: Repository,
+        *,
+        revalidate: Callable[[], None],
+        fetcher: CaseStateFetcher | None = None,
+    ) -> dict[str, Any]:
+        """Verify and record a one-shot local-to-GitHub repository migration."""
+        record = self.registry.problem(case_id)
+        if record["status"] != "LIVE":
+            raise ProtocolError("only a LIVE case repository may be migrated")
+        workspace = self.case_workspace(case_id)
+        repository_name = CaseProvisioner.repository_name(
+            workspace.root.name, str(record["task_commitment"])
+        )
+        source = self.root / "repositories" / "remotes" / f"{repository_name}.git"
+        try:
+            repository_root = (self.root / "repositories" / "remotes").resolve(strict=True)
+            resolved_source = source.resolve(strict=True)
+        except OSError as exc:
+            raise ProtocolError("source case repository is unavailable") from exc
+        if source.is_symlink() or not resolved_source.is_relative_to(repository_root):
+            raise ProtocolError("source case repository escapes the hub boundary")
+        evidence = verify_local_to_github_mirror(
+            case_id=case_id,
+            record=record,
+            workspace=workspace,
+            source_git_dir=resolved_source,
+            destination=destination,
+        )
+        bundle = (fetcher or fetch_case_state)(record)
+        snapshot = bundle.get("snapshot") if isinstance(bundle, dict) else None
+        if not isinstance(snapshot, dict):
+            raise ProtocolError("case clerk did not return a verified snapshot")
+        evidence_name = evidence.ref_manifest_sha256.removeprefix("sha256:")
+        _write_json(
+            self.control
+            / "private"
+            / "repository-migrations"
+            / f"{case_id}-{evidence_name}.json",
+            {
+                "schema": "boule-repository-migration-evidence/0.1",
+                "case_id": case_id,
+                "marker_blob_sha256": evidence.marker_blob_sha256,
+                "ref_manifest": evidence.ref_manifest,
+                "ref_manifest_sha256": evidence.ref_manifest_sha256,
+            },
+            mode=0o600,
+        )
+        revalidate()
+        migrated = self.registry.migrate_repository(
+            case_id,
+            expected_registry_head,
+            evidence.destination.url,
+            evidence.destination_commit,
+            evidence.destination.repository_id,
+            evidence.destination.repository_node_id,
+            evidence.marker_blob_sha256,
+            evidence.ref_manifest,
+            evidence.ref_manifest_sha256,
+            snapshot.get("head_event_hash"),
+            snapshot.get("event_count"),
+        )
+        return migrated
 
     def activate(
         self,

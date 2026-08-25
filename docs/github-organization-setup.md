@@ -71,3 +71,41 @@ The protocol repository was transferred to
 repository id `1332560675`, branches, and pull requests. Re-check branch
 protection and App access after any organization policy change. A successful
 Git authentication is not itself authorization to transfer another repository.
+
+## 5. Migrate an existing staging-local case
+
+The migration command does not create a repository or push Git data. First
+freeze automated writers, back up the hub and source bare repository, create an
+empty private repository with the case's deterministic name, and mirror-push
+the complete source refs through the authorized owner account. Keep the local
+source bare repository intact.
+
+From a host that has read access to the hub, authenticated `gh` access, and SSH
+read access to the destination, record the transition with the registry head
+observed immediately before the operation:
+
+```bash
+boule registry migrate-repository /data CASE_ID \
+  --expected-registry-head REGISTRY_HEAD \
+  --github-org BouleProtocol \
+  --github-account EXPECTED_GITHUB_LOGIN \
+  --visibility private
+```
+
+This command performs lookup-only GitHub metadata inspection, clones the
+destination afresh, checks Git integrity and exact branch/tag parity, verifies
+the original marker bytes and signature at the pinned commit, advances the
+verified case-clerk anchor, and finally appends one clerk-signed migration
+event under a registry-head compare-and-swap. The exact ref manifest remains as
+`0600` hub-private evidence; only its schema, count, `main`, and digest enter
+the public registry. It fails without changing the registry if the destination
+is missing, empty, public, renamed, owned by the
+wrong organization, has a non-`main` default branch, has any moved/missing/extra
+ref, or does not preserve the original marker.
+
+Afterwards, verify the signed public registry projection, clone the private
+GitHub repository independently, run `git fsck --strict`, and compare its
+canonical refs again. Do not delete the original staging repository: it is the
+rollback and provenance source for this one-shot v0.6 transition. A future
+rollback needs another explicit signed protocol transition; editing the JSONL
+or repointing a URL is not a rollback.

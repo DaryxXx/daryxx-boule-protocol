@@ -75,6 +75,50 @@ participant, reviewer, submitter, or payer. Keep its private key in a
 restricted local secret mechanism; do not commit it, put it in issue text, or
 send it to a case clerk.
 
+### One-shot staging repository migration
+
+A case first provisioned by the staging-local provider may be moved to its
+deterministic private GitHub repository without rewriting the original signed
+marker. This is a one-shot `LIVE` self-transition, not a second case and not a
+native GitHub ownership transfer. The original `local:*` repository id remains
+the marker identity; the current top-level repository fields become the
+verified GitHub id, node id, URL, and `main` commit.
+
+The maintainer command is lookup-only: it cannot create the destination. It
+requires an exact active `gh` account, validates owner/name/URL/private
+visibility/default branch/id/node from GitHub, and makes a fresh SSH mirror
+clone. Before appending anything it:
+
+1. runs strict Git integrity checks on both bare repositories;
+2. requires an identical, bounded, canonical manifest of every branch and tag;
+3. requires the destination `main` commit to equal the manifest's `main` ref;
+4. reads `.boule/case-marker.json` at the original pinned commit in both
+   repositories, compares the bytes, and verifies its clerk signature and
+   original local repository identity;
+5. fetches and verifies the current case-clerk chain head; and
+6. compares the registry head supplied by the operator inside the registry
+   write lock.
+
+Only then does the registry clerk append `repository_migrated`. The signed
+event contains the complete old and new bindings, the original marker-blob
+digest, the canonical manifest schema/count/main/digest, and the verified
+case-clerk head/count. Its public migration history also names the exact
+registry sequence and entry hash. The exact ref names and object ids remain in
+`0600` maintainer evidence rather than leaking private branch names through the
+public registry. A failed check leaves the registry unchanged; an exact retry
+after an ambiguous success is idempotent.
+
+The canonical manifest schema is `boule-git-ref-manifest/0.1`: at most 256
+lexicographically ordered, unique `refs/heads/*` and `refs/tags/*` entries,
+each with its lowercase Git object id, encoded with Boule canonical JSON. Any
+other ref namespace is rejected so it cannot disappear silently during the
+move. The original local bare repository is retained as rollback evidence.
+
+After migration, the marker alone no longer identifies the current host.
+Verification requires both the unchanged marker and the clerk-signed registry
+migration history. A rollback must be a future explicit signed transition;
+operators must not edit the event or silently repoint the current fields.
+
 ## Case-clerk and API boundary
 
 The registry HTTP service is read-only. It publishes signed registry snapshots,

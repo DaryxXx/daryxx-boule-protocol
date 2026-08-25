@@ -36,10 +36,11 @@ from .maintainer_advisor import ALLOWED_MODELS, advise
 from .policy import DISCLOSURE_MODES, build_case_policy
 from .problem_import import import_problem
 from .protocol import replay_ledger
-from .provisioner import GitHubAppRepositoryProvider, LocalRepositoryProvider
+from .provisioner import CaseProvisioner, GitHubAppRepositoryProvider, LocalRepositoryProvider
 from .registry import MAX_CHAIN_PROOF_ENTRIES, verify_registry_snapshot
 from .registry_api import build_server as build_registry_server
 from .remote_client import RemoteClient
+from .repository_migration import inspect_github_repository
 from .session_store import SessionStore, load_maintainer_key, maintainer_key_path
 from .trust_store import read_registry_trust, trust_registry_snapshot
 from .workspace import Workspace
@@ -1102,6 +1103,43 @@ def _registry_activate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _registry_migrate_repository(args: argparse.Namespace) -> int:
+    hub = Hub(args.registry)
+    organization = args.github_org or os.environ.get("BOULE_GITHUB_ORG")
+    account = args.github_account or os.environ.get("BOULE_GITHUB_ACCOUNT")
+    if not organization or not account:
+        raise ProtocolError("GitHub organization and expected account are required")
+    current = hub.registry.problem(args.case)
+    workspace = hub.case_workspace(args.case)
+    repository_name = CaseProvisioner.repository_name(
+        workspace.root.name, str(current["task_commitment"])
+    )
+    before = hub.registry.count
+    with inspect_github_repository(
+        organization,
+        repository_name,
+        expected_account=account,
+        private=args.visibility == "private",
+    ) as inspection:
+        record = hub.migrate_repository(
+            args.case,
+            args.expected_registry_head,
+            inspection.repository,
+            revalidate=inspection.revalidate,
+        )
+    _print(
+        {
+            "case": record,
+            "registry_head": hub.registry.head,
+            "migration_recorded": hub.registry.count > before,
+            "repository_verified": True,
+            "original_marker_bytes_verified": True,
+        },
+        args.json,
+    )
+    return 0
+
+
 def _registry_tick(args: argparse.Namespace) -> int:
     _print(Hub(args.registry).tick(), args.json)
     return 0
@@ -1488,6 +1526,34 @@ def build_parser() -> argparse.ArgumentParser:
     registry_activate.add_argument("--clerk-url", required=True, help="case clerk HTTPS origin")
     registry_activate.add_argument("--json", action="store_true", help="emit compact JSON")
     registry_activate.set_defaults(handler=_registry_activate)
+
+    registry_migrate = registry_commands.add_parser(
+        "migrate-repository",
+        help="record a signed repository mirror transition for one LIVE case",
+    )
+    registry_migrate.add_argument("registry", help="registry runtime directory")
+    registry_migrate.add_argument("case", help="LIVE case id")
+    registry_migrate.add_argument(
+        "--expected-registry-head",
+        required=True,
+        help="compare-and-swap head observed before migration",
+    )
+    registry_migrate.add_argument(
+        "--github-org",
+        help="destination organization; or BOULE_GITHUB_ORG",
+    )
+    registry_migrate.add_argument(
+        "--github-account",
+        help="required active gh account; or BOULE_GITHUB_ACCOUNT",
+    )
+    registry_migrate.add_argument(
+        "--visibility",
+        choices=["private", "public"],
+        default="private",
+        help="required destination visibility",
+    )
+    registry_migrate.add_argument("--json", action="store_true", help="emit compact JSON")
+    registry_migrate.set_defaults(handler=_registry_migrate_repository)
 
     registry_tick = registry_commands.add_parser(
         "tick", help="verify registry state and print deterministic pending actions"
