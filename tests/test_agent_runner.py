@@ -26,6 +26,7 @@ from boule.clerk_api import build_server
 from boule.cli import build_parser
 from boule.crypto import generate_private_key, public_key_text
 from boule.errors import ProtocolError
+from boule.protocol_change import classify_protocol_change
 from boule.provider_runtime import (
     build_provider_command,
     normalize_provider_event,
@@ -35,6 +36,7 @@ from boule.provider_runtime import (
 from boule.run_store import RunStore, process_identity, process_matches
 from boule.terminal_ui import (
     RunTerminal,
+    _timeline_label,
     build_run_dashboard,
     format_runtime_line,
     print_run_dashboard,
@@ -133,6 +135,110 @@ def test_provider_projection_reports_usage_without_double_counting_cache() -> No
     assert claude["provider_reported_cost_usd"] == 0.01
     assert claude["provider_duration_ms"] == 12
     assert claude["usage"]["output_tokens"] == 1
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [
+        (
+            {"claim": None},
+            {"claim": {"claim_id": "c-1", "status": "active"}},
+            "claim.recorded",
+        ),
+        (
+            {"claim": {"claim_id": "c-1", "status": "active", "deadline": "first"}},
+            {"claim": {"claim_id": "c-1", "status": "active", "deadline": "second"}},
+            "claim.renewed",
+        ),
+        (
+            {"claim": {"claim_id": "c-1"}, "checkpoint_count": 0},
+            {"claim": {"claim_id": "c-1"}, "checkpoint_count": 1},
+            "checkpoint.recorded",
+        ),
+        (
+            {"claim": {"claim_id": "c-1"}, "handoff": None},
+            {"claim": {"claim_id": "c-1"}, "handoff": {"handoff_id": "h-1"}},
+            "handoff.recorded",
+        ),
+        (
+            {"claim": {"claim_id": "c-1"}, "network": {"sessions": 1}},
+            {"claim": {"claim_id": "c-1"}, "network": {"sessions": 2}},
+            "network.updated",
+        ),
+    ],
+)
+def test_protocol_change_classifies_signed_state_transitions(before, after, expected) -> None:
+    assert classify_protocol_change(before, after) == expected
+
+
+def test_terminal_protocol_labels_are_precise_and_legacy_safe() -> None:
+    assert _timeline_label(
+        {
+            "kind": "protocol.updated",
+            "change": "claim.recorded",
+            "claim": {"route": "k=5 curve"},
+        }
+    ) == ("Boule", "Signed claim recorded · k=5 curve")
+    assert _timeline_label(
+        {
+            "kind": "protocol.updated",
+            "change": "claim.renewed",
+            "claim": {"deadline": "2026-08-25T13:37:00Z"},
+        }
+    ) == ("Boule", "Signed claim renewed · deadline 2026-08-25T13:37:00Z")
+    assert _timeline_label({"kind": "protocol.updated", "claim": {"route": "legacy route"}}) == (
+        "Boule",
+        "Signed claim state observed",
+    )
+
+
+def test_legacy_protocol_timeline_infers_claim_record_and_renewal() -> None:
+    status, config, _events = _terminal_fixture()
+    claim = {
+        "claim_id": "c-legacy",
+        "route": "legacy k=5 route",
+        "status": "active",
+        "deadline": "2026-01-01T01:00:00Z",
+    }
+    events = [
+        {
+            "sequence": 1,
+            "kind": "protocol.updated",
+            "claim": None,
+            "handoff": None,
+            "collaborator_count": 0,
+            "observed_at": "2026-01-01T00:00:01Z",
+        },
+        {
+            "sequence": 2,
+            "kind": "protocol.updated",
+            "claim": claim,
+            "handoff": None,
+            "collaborator_count": 0,
+            "observed_at": "2026-01-01T00:00:02Z",
+        },
+        {
+            "sequence": 3,
+            "kind": "protocol.updated",
+            "claim": {**claim, "deadline": "2026-01-01T01:05:00Z"},
+            "handoff": None,
+            "collaborator_count": 0,
+            "observed_at": "2026-01-01T00:00:03Z",
+        },
+    ]
+    output = StringIO()
+    Console(file=output, force_terminal=False, color_system=None, width=140).print(
+        build_run_dashboard(
+            status,
+            config,
+            events,
+            now=datetime(2026, 1, 1, 0, 2, 5, tzinfo=UTC),
+            width=140,
+        )
+    )
+    text = output.getvalue()
+    assert "Signed claim recorded · legacy k=5 route" in text
+    assert "Signed claim renewed · deadline 2026-01-01T01:05:00Z" in text
 
 
 @pytest.mark.parametrize("cost", [True, -1, float("nan"), float("inf")])
@@ -265,10 +371,22 @@ def test_problem_query_prefers_the_only_case_with_durable_activity(monkeypatch) 
 
 def test_cli_accepts_requested_agent_name_spellings() -> None:
     parser = build_parser()
-    first = parser.parse_args(["codex", "erdos-686", "--agent-name", "Daryxx1"])
+    first = parser.parse_args(
+        [
+            "codex",
+            "erdos-686",
+            "--agent-name",
+            "Daryxx1",
+            "--max-tokens",
+            "250000",
+        ]
+    )
     second = parser.parse_args(["codex", "erdos-686", "--agent_name", "Daryxx2"])
+    resumed = parser.parse_args(["run", "resume", "run-example", "--max-tokens", "50000"])
     assert first.agent_name == "Daryxx1"
+    assert first.max_tokens == 250_000
     assert second.agent_name == "Daryxx2"
+    assert resumed.max_tokens == 50_000
 
 
 def test_non_finite_deadline_fails_before_provider_or_public_side_effects(tmp_path) -> None:
@@ -286,6 +404,28 @@ def test_non_finite_deadline_fails_before_provider_or_public_side_effects(tmp_pa
             effort=None,
             max_seconds=float("nan"),
             instruction=None,
+            run_root=tmp_path / "runs",
+        )
+    assert not (tmp_path / "runs").exists()
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_invalid_token_budget_fails_before_provider_or_public_side_effects(tmp_path, value) -> None:
+    with pytest.raises(ProtocolError, match="positive integer"):
+        prepare_run(
+            "codex",
+            "anything",
+            agent_name="Daryxx1",
+            controller=None,
+            registry=None,
+            registry_clerk_key=None,
+            trust_store=None,
+            mode=None,
+            model=None,
+            effort=None,
+            max_seconds=30,
+            instruction=None,
+            max_tokens=value,
             run_root=tmp_path / "runs",
         )
     assert not (tmp_path / "runs").exists()
@@ -381,6 +521,7 @@ def test_successful_provider_exit_is_not_a_contribution_without_handoff(
             effort=None,
             max_seconds=30,
             instruction=None,
+            max_tokens=1_000,
             run_root=run_root,
             workspace_path=clone.root,
             workspace_server=origin,
@@ -400,6 +541,13 @@ def test_successful_provider_exit_is_not_a_contribution_without_handoff(
     assert status["usage"]["input_tokens"] == 7
     assert status["protocol"]["complete"] is False
     assert status["provider_turn_status"] == "completed"
+    protocol_events = [
+        event
+        for event in RunStore(run_root).events(prepared["run_id"])
+        if event.get("kind") == "protocol.updated"
+    ]
+    assert protocol_events
+    assert all(isinstance(event.get("change"), str) for event in protocol_events)
 
     fake.write_text(
         "#!/usr/bin/python3\n"
@@ -420,6 +568,8 @@ def test_successful_provider_exit_is_not_a_contribution_without_handoff(
     )
     assert recovered["session_id"] == prepared["session_id"]
     assert recovered["workspace"] == prepared["workspace"]
+    assert recovered["max_tokens"] == 1_000
+    assert RunStore(run_root).config(recovered["run_id"])["max_tokens"] == 1_000
     with _server(central, maintainer):
         assert run_worker(recovered["run_id"], run_root=run_root) == 1
     recovered_status = RunStore(run_root).status(recovered["run_id"])
@@ -475,6 +625,7 @@ def _terminal_fixture() -> tuple[dict, dict, list[dict]]:
         "model": "gpt-test",
         "effort": "ultra",
         "max_seconds": 600,
+        "max_tokens": 1_000,
         "instruction": "PRIVATE PROMPT MUST NOT RENDER",
         "registry": {"origin": "https://boule.example"},
     }
@@ -547,6 +698,7 @@ def _terminal_fixture() -> tuple[dict, dict, list[dict]]:
         {
             "sequence": 5,
             "kind": "protocol.updated",
+            "change": "claim.recorded",
             "claim": {"route": "exact k=4 valuation route"},
             "observed_at": "2026-01-01T00:02:04Z",
         },
@@ -588,6 +740,8 @@ def test_rich_terminal_dashboard_shows_operational_context_without_raw_trace() -
         "31",
         "output",
         "12 reasoning",
+        "Token budget",
+        "278 / 1,000 · 27.8%",
         "Activity is not mathematical progress or credit",
     ):
         assert expected in text
@@ -614,7 +768,45 @@ def test_plain_terminal_fallback_is_stable_and_has_no_ansi() -> None:
     assert "codex/gpt-test/ultra" in line
     assert "activity: #5 protocol.updated (now)" in line
     assert "tokens: 247 in / 31 out (provider-reported)" in line
+    assert "token budget: 278 / 1,000 provider-reported · 27.8%" in line
     assert "\x1b" not in line
+
+
+def test_token_budget_waits_for_authoritative_usage_and_marks_overrun() -> None:
+    status, config, events = _terminal_fixture()
+    status["usage"] = None
+    pending = StringIO()
+    Console(file=pending, force_terminal=False, color_system=None, width=140).print(
+        build_run_dashboard(
+            status,
+            config,
+            events,
+            now=datetime(2026, 1, 1, 0, 2, 5, tzinfo=UTC),
+            width=140,
+        )
+    )
+    assert "report pending · limit 1,000" in pending.getvalue()
+
+    status["usage"] = {
+        "authoritative": True,
+        "input_tokens": 247,
+        "cache_read_tokens": 192,
+        "output_tokens": 31,
+        "reasoning_output_tokens": 12,
+    }
+    config["max_tokens"] = 200
+    exceeded = StringIO()
+    Console(file=exceeded, force_terminal=False, color_system=None, width=140).print(
+        build_run_dashboard(
+            status,
+            config,
+            events,
+            now=datetime(2026, 1, 1, 0, 2, 5, tzinfo=UTC),
+            width=140,
+        )
+    )
+    text = exceeded.getvalue()
+    assert "278 / 200 · 139.0% · +78 over" in text
 
 
 def test_terminal_elapsed_freezes_at_the_terminal_timestamp() -> None:

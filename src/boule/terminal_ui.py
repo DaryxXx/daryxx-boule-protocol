@@ -20,6 +20,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .errors import ProtocolError
+from .protocol_change import classify_protocol_change
 from .run_store import TERMINAL_STATES, RunStore
 from .text_safety import redact_sensitive_text
 
@@ -116,6 +117,44 @@ def _reported_cost(value: Any) -> str | None:
     return f"${float(value):,.4f}"
 
 
+def _token_budget(config: dict[str, Any]) -> int | None:
+    value = config.get("max_tokens")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _reported_token_total(status: dict[str, Any]) -> int | None:
+    usage = status.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    for value in (input_tokens, output_tokens):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+    return input_tokens + output_tokens
+
+
+def _token_budget_summary(used: int | None, budget: int) -> str:
+    if used is None:
+        return f"waiting for provider report · limit {budget:,}"
+    percentage = used / budget * 100
+    summary = f"{used:,} / {budget:,} provider-reported · {percentage:.1f}%"
+    if used > budget:
+        summary += f" · exceeded by {used - budget:,}"
+    return summary
+
+
+def _token_budget_label(used: int | None, budget: int) -> str:
+    if used is None:
+        return f"report pending · limit {budget:,}"
+    label = f"{used:,} / {budget:,} · {used / budget * 100:.1f}%"
+    if used > budget:
+        label += f" · +{used - budget:,} over"
+    return label
+
+
 def _age(seconds: int | None) -> str:
     if seconds is None:
         return "unknown"
@@ -199,9 +238,18 @@ def _event_metrics(events: list[dict[str, Any]], now: datetime) -> dict[str, Any
     tool_classes: Counter[str] = Counter()
     latest_tool: dict[str, Any] | None = None
     latest_message: dict[str, Any] | None = None
+    previous_protocol_event: dict[str, Any] | None = None
     material: list[dict[str, Any]] = []
     for event in ordered:
         kind = str(event.get("kind"))
+        display_event = event
+        if kind == "protocol.updated":
+            if not isinstance(event.get("change"), str):
+                display_event = {
+                    **event,
+                    "change": classify_protocol_change(previous_protocol_event, event),
+                }
+            previous_protocol_event = event
         item_id = event.get("item_id")
         if kind == "tool.started":
             if isinstance(item_id, str):
@@ -216,7 +264,7 @@ def _event_metrics(events: list[dict[str, Any]], now: datetime) -> dict[str, Any
         if kind == "message.completed":
             latest_message = event
         if kind in MATERIAL_EVENT_KINDS:
-            material.append(event)
+            material.append(display_event)
     latest = ordered[-1] if ordered else None
     return {
         "counts": counts,
@@ -277,11 +325,54 @@ def _timeline_label(event: dict[str, Any]) -> tuple[str, str]:
     if kind == "plan.updated":
         return "Plan", "Research plan updated privately"
     if kind == "protocol.updated":
-        if event.get("handoff"):
+        change = event.get("change")
+        if change == "handoff.recorded":
             return "Boule", "Signed handoff observed by the clerk"
-        if event.get("claim"):
+        if change == "handoff.updated":
+            return "Boule", "Signed handoff state updated"
+        if change == "claim.recorded":
             route = _clean((event.get("claim") or {}).get("route"), 210)
             return "Boule", f"Signed claim recorded · {route}" if route else "Signed claim recorded"
+        if change == "claim.renewed":
+            deadline = _clean((event.get("claim") or {}).get("deadline"), 80)
+            return (
+                "Boule",
+                f"Signed claim renewed · deadline {deadline}"
+                if deadline
+                else "Signed claim renewed",
+            )
+        if change in {"claim.updated", "claim.status_changed"}:
+            status = _clean((event.get("claim") or {}).get("status"), 40)
+            return (
+                "Boule",
+                f"Signed claim state updated · {status}"
+                if status
+                else "Signed claim state updated",
+            )
+        if change == "claim.cleared":
+            return "Boule", "Signed claim is no longer active"
+        if change == "checkpoint.recorded":
+            count = event.get("checkpoint_count")
+            suffix = (
+                f" · {count} total"
+                if isinstance(count, int) and not isinstance(count, bool)
+                else ""
+            )
+            return "Boule", f"Signed checkpoint observed{suffix}"
+        if change == "message.recorded":
+            return "Boule", "Signed coordination message observed"
+        if change == "collaboration.updated":
+            return "Boule", "Active collaborator set updated"
+        if change == "network.updated":
+            return "Boule", "Case network state updated"
+        if change == "signed_state.updated":
+            return "Boule", "Signed protocol state updated"
+        # Older run events did not carry a causal change classification. Keep
+        # their rendering truthful without claiming that a claim was re-created.
+        if event.get("handoff"):
+            return "Boule", "Signed handoff state observed by the clerk"
+        if event.get("claim"):
+            return "Boule", "Signed claim state observed"
         return "Boule", "Signed collaboration state updated"
     if kind == "turn.completed":
         return "Provider", "Provider reported the turn complete"
@@ -341,6 +432,8 @@ def build_run_dashboard(
         and maximum_raw > 0
         else 0.0
     )
+    token_budget = _token_budget(config)
+    reported_tokens = _reported_token_total(status)
     remaining = max(0, int(maximum - elapsed)) if maximum > 0 else None
     protocol = status.get("protocol") if isinstance(status.get("protocol"), dict) else {}
     claim = protocol.get("claim") if isinstance(protocol.get("claim"), dict) else None
@@ -510,7 +603,7 @@ def build_run_dashboard(
         runtime_rows.append(("Error", _clean(status.get("error"), 220)))
     if reported_cost is None:
         runtime_rows.append(("Cost", "Not reported by this provider"))
-    progress = ProgressBar(
+    time_progress = ProgressBar(
         total=max(1.0, maximum),
         completed=min(maximum, float(elapsed)) if maximum > 0 else 0,
         width=None,
@@ -518,8 +611,33 @@ def build_run_dashboard(
         complete_style=GOLD,
         finished_style=RED if state == "timed_out" else GREEN,
     )
-    budget_label = Text("Time budget", style=MUTED)
-    runtime_content = Group(_details(runtime_rows), Text(), budget_label, progress)
+    time_budget_label = Text("Time budget", style=MUTED)
+    budget_renderables: list[Any] = [
+        _details(runtime_rows),
+        Text(),
+        time_budget_label,
+        time_progress,
+    ]
+    if token_budget is not None:
+        token_color = (
+            RED if reported_tokens is not None and reported_tokens > token_budget else GOLD
+        )
+        token_budget_label = Text("Token budget  ", style=MUTED)
+        token_budget_label.append(
+            _token_budget_label(reported_tokens, token_budget), style=token_color
+        )
+        token_progress = ProgressBar(
+            total=token_budget,
+            completed=min(token_budget, reported_tokens or 0),
+            width=None,
+            style="#26352e",
+            complete_style=GOLD,
+            finished_style=RED
+            if reported_tokens is not None and reported_tokens > token_budget
+            else GREEN,
+        )
+        budget_renderables.extend((Text(), token_budget_label, token_progress))
+    runtime_content = Group(*budget_renderables)
     runtime_panel = Panel(
         runtime_content,
         title=f"[bold {GOLD}]Runtime & accounting[/]",
@@ -656,6 +774,11 @@ def build_run_dashboard(
                 f"clerk {_age(protocol_age)}",
             ),
         ]
+        if token_budget is not None:
+            compact_rows.insert(
+                5,
+                ("Token budget", _token_budget_summary(reported_tokens, token_budget)),
+            )
         if provider_duration is not None:
             compact_rows.append(("Provider duration", provider_duration))
         if reported_cost is not None:
@@ -742,6 +865,11 @@ def format_runtime_line(
         )
     else:
         fields.append("· tokens: pending provider report")
+    token_budget = _token_budget(config or {})
+    if token_budget is not None:
+        fields.append(
+            f"· token budget: {_token_budget_summary(_reported_token_total(status), token_budget)}"
+        )
     provider_duration = _provider_duration(status.get("provider_duration_ms"))
     if provider_duration is not None:
         fields.append(f"· provider time: {provider_duration}")

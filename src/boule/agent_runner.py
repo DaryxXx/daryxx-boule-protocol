@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 from .crypto import generate_private_key, load_private_key, write_private_key
 from .errors import ProtocolError
+from .protocol_change import classify_protocol_change
 from .provider_runtime import (
     build_provider_command,
     normalize_provider_event,
@@ -267,6 +268,7 @@ def prepare_run(
     effort: str | None,
     max_seconds: float,
     instruction: str | None,
+    max_tokens: int | None = None,
     run_root: str | Path | None = None,
     work_root: str | Path | None = None,
     workspace_path: str | Path | None = None,
@@ -275,6 +277,10 @@ def prepare_run(
     validate_provider_options(provider, effort)
     if not math.isfinite(max_seconds) or max_seconds <= 0 or max_seconds > 167 * 3600:
         raise ProtocolError("--max-seconds must be finite, greater than 0, and at most 601200")
+    if max_tokens is not None and (
+        isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0
+    ):
+        raise ProtocolError("--max-tokens must be a positive integer")
     if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,63})", agent_name):
         raise ProtocolError("agent name must be 1-64 safe identifier characters")
     # Resolve the harness before cloning or creating a public signed session.
@@ -294,6 +300,8 @@ def prepare_run(
             "task_mode": mode,
             "session_id": None,
             "workspace": None,
+            "max_seconds": max_seconds,
+            "max_tokens": max_tokens,
             "event_count": 0,
             "usage": None,
             "protocol": {
@@ -373,6 +381,7 @@ def prepare_run(
             "model": model,
             "effort": effort,
             "max_seconds": max_seconds,
+            "max_tokens": max_tokens,
             "instruction": instruction,
             "boule_bin_dir": str(Path(sys.executable).resolve().parent),
         }
@@ -400,6 +409,7 @@ def prepare_resume(
     instruction: str | None,
     model: str | None,
     effort: str | None,
+    max_tokens: int | None = None,
     run_root: str | Path | None = None,
 ) -> dict[str, Any]:
     store = RunStore(run_root)
@@ -419,6 +429,13 @@ def prepare_resume(
     if not math.isfinite(max_seconds) or not 0 < max_seconds <= 167 * 3600:
         raise ProtocolError("--max-seconds must be finite, greater than 0, and at most 601200")
     parent_config = store.config(parent_run_id)
+    effective_max_tokens = max_tokens if max_tokens is not None else parent_config.get("max_tokens")
+    if effective_max_tokens is not None and (
+        isinstance(effective_max_tokens, bool)
+        or not isinstance(effective_max_tokens, int)
+        or effective_max_tokens <= 0
+    ):
+        raise ProtocolError("--max-tokens must be a positive integer")
     workspace = Workspace(parent_config["workspace"])
     profile, _key = SessionStore(workspace).load(parent_config["session_id"])
     not_after = datetime.fromisoformat(profile["not_after"].replace("Z", "+00:00"))
@@ -447,6 +464,7 @@ def prepare_resume(
         "model": model or parent_config.get("model"),
         "effort": effort or parent_config.get("effort"),
         "max_seconds": max_seconds,
+        "max_tokens": effective_max_tokens,
         "instruction": effective_instruction,
     }
     status = {
@@ -459,6 +477,8 @@ def prepare_resume(
         "session_id": config["session_id"],
         "workspace": config["workspace"],
         "parent_run_id": parent_run_id,
+        "max_seconds": max_seconds,
+        "max_tokens": effective_max_tokens,
         "event_count": 0,
         "usage": None,
         "protocol": parent.get("protocol")
@@ -489,6 +509,13 @@ def _prompt(config: dict[str, Any]) -> str:
             "session. Inspect the preserved working tree first. Prioritize checkpointing and "
             "publishing the honest handoff before doing more research.\n"
         )
+    token_budget = ""
+    if config.get("max_tokens") is not None:
+        token_budget = (
+            f" The operator also set an accounting budget of {config['max_tokens']:,} "
+            "provider-reported input plus output tokens. Boule may only observe usage when the "
+            "provider reports it, so this is not an exact provider-side cutoff."
+        )
     return f"""You are {config["agent_name"]}, an autonomous research participant in Boule.
 
 Work only on the exact pinned case in the current directory. Your public identity is
@@ -511,8 +538,8 @@ may use the delegated session internally. Leave all artifacts inside this worksp
 Do not claim that compute, messages, or elapsed time are contributions.
 {recovery}
 {extra}
-The supervisor will stop this run after {int(config["max_seconds"])} seconds. Preserve a
-handoff before then. Start now.
+The supervisor will stop this run after {int(config["max_seconds"])} seconds.{token_budget}
+Preserve a handoff before the available budget is exhausted. Start now.
 """
 
 
@@ -624,13 +651,17 @@ def _refresh_protocol(
         return store.update(run_id, protocol_error=str(exc))
     current = store.status(run_id)
     if projection != current.get("protocol"):
+        change = classify_protocol_change(current.get("protocol"), projection)
         store.append_event(
             run_id,
             {
                 "kind": "protocol.updated",
+                "change": change,
                 "claim": projection.get("claim"),
                 "handoff": projection.get("handoff"),
                 "collaborator_count": len(projection.get("collaborators", [])),
+                "checkpoint_count": projection.get("checkpoint_count"),
+                "message_count": projection.get("message_count"),
             },
         )
     return store.update(

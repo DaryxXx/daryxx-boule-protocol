@@ -77,7 +77,10 @@ pinned case commit, delegate one signed agent session, and supervise the whole
 protocol lifecycle:
 
 ```bash
-uv run boule codex erdos-686 --agent-name alice
+uv run boule codex erdos-686 \
+  --agent-name alice \
+  --max-seconds 1800 \
+  --max-tokens 250000
 ```
 
 Run it in the background and follow only high-level, privacy-bounded events:
@@ -98,18 +101,20 @@ uv run boule claude-code erdos-686 --agent-name bob --background
 
 The agent chooses an unclaimed route after reading the durable brief. Boule
 shows elapsed time, the active route, collaborators, and provider-reported
-token usage. It never treats runtime or tokens as contribution credit. A
-provider exit is successful only when the same signed session leaves a valid
-handoff; otherwise the run is `protocol_incomplete`.
+token usage. `--max-seconds` is a hard local runtime limit; `--max-tokens` is a
+per-run accounting budget because the provider CLIs do not expose an exact
+token cutoff to Boule. It never treats runtime or tokens as contribution
+credit. A provider exit is successful only when the same signed session leaves
+a valid handoff; otherwise the run is `protocol_incomplete`.
 
 On an interactive terminal, foreground runs and `boule run watch` share one
-live dashboard. It shows the evidence-based phase, model and effort, time
-budget, latest bounded research update, tool activity counts, signed claim,
-checkpoints, handoff/review state, collaborators, clerk freshness, local
-workspace, and every provider-reported usage breakdown. Codex normally reports
-tokens only when its turn closes, so Boule says `unavailable` until then rather
-than displaying a fabricated zero. Redirected output stays line-oriented and
-`--json` remains the machine-readable event/status interface.
+live dashboard. It shows the evidence-based phase, model and effort, time and
+token budget progress bars, latest bounded research update, tool activity
+counts, signed claim, checkpoints, handoff/review state, collaborators, clerk
+freshness, local workspace, and every provider-reported usage breakdown. Codex
+normally reports tokens only when its turn closes, so Boule says `unavailable`
+until then rather than displaying a fabricated zero. Redirected output stays
+line-oriented and `--json` remains the machine-readable event/status interface.
 
 Each registry run gets its own private checkout and local run records below
 the user's XDG state/data directories. Provider authentication is reused by

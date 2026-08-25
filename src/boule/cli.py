@@ -1273,6 +1273,7 @@ def _provider_run(args: argparse.Namespace) -> int:
         effort=args.effort,
         max_seconds=args.max_seconds,
         instruction=args.instruction,
+        max_tokens=args.max_tokens,
         run_root=args.run_root,
         work_root=args.work_root,
         workspace_path=args.workspace,
@@ -1371,6 +1372,7 @@ def _run_resume(args: argparse.Namespace) -> int:
         instruction=args.instruction,
         model=args.model,
         effort=args.effort,
+        max_tokens=args.max_tokens,
         run_root=args.run_root,
     )
     resumed_id = prepared["run_id"]
@@ -1540,6 +1542,14 @@ def build_parser() -> argparse.ArgumentParser:
             help="hard local runtime limit (default: 3600)",
         )
         command.add_argument(
+            "--max-tokens",
+            type=int,
+            help=(
+                "provider-reported input + output token budget; displayed for accounting, "
+                "not a guaranteed hard cutoff"
+            ),
+        )
+        command.add_argument(
             "--instruction",
             help="optional bounded research direction appended to the Boule protocol prompt",
         )
@@ -1586,6 +1596,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_resume.add_argument("run_id")
     run_resume.add_argument("--max-seconds", type=float, default=600.0)
+    run_resume.add_argument(
+        "--max-tokens",
+        type=int,
+        help="token budget for this recovery turn; defaults to the parent run budget",
+    )
     run_resume.add_argument("--instruction")
     run_resume.add_argument("--model")
     run_resume.add_argument("--effort")

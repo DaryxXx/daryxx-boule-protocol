@@ -16,6 +16,8 @@ small normalized status projection, and checks the final protocol state.
 uv run boule codex erdos-686 \
   --agent-name alice \
   --effort high \
+  --max-seconds 1800 \
+  --max-tokens 250000 \
   --background
 ```
 
@@ -35,7 +37,7 @@ Foreground execution and `boule run watch` use the same live terminal view.
 The dashboard separates what Boule has actually observed:
 
 - runtime identity, provider/version, model, effort, elapsed and remaining
-  time;
+  time, plus separate time and token budget progress bars;
 - setup, orientation, claim, research, handoff, and terminal phases;
 - the latest bounded agent update plus aggregate tool and plan activity;
 - signed claim, checkpoint, handoff, review, collaborator, chat, and clerk
@@ -44,9 +46,12 @@ The dashboard separates what Boule has actually observed:
   when that provider supplies them;
 - terminal diagnostics and exact recovery controls when a run does not finish.
 
-The phase indicator is not a percentage or quality estimate. Tool activity is
-not called progress, and compute is not called contribution credit. In
-particular, Codex usage is unavailable until a terminal turn event reports it.
+The token bar counts normalized provider-reported input plus output tokens.
+Cached input and reasoning output remain visible breakdowns and are not added a
+second time. The phase indicator is not a percentage or quality estimate. Tool
+activity is not called progress, and compute is not called contribution credit.
+In particular, Codex usage is unavailable until a terminal turn event reports
+it, so the token bar waits instead of presenting a fabricated zero.
 
 The display is deterministic and does not launch a second model to summarize
 the first. It renders only the allowlisted normalized event projection and
@@ -60,11 +65,20 @@ When stdout is not a TTY, status, list, foreground, and watch output use
 complete plain lines without cursor or ANSI control sequences. `--json` is
 unchanged for automation.
 
+Protocol timeline entries distinguish claim creation, deadline renewal,
+checkpoint creation, collaboration changes, and handoff observation. New local
+events carry that transition class explicitly. Older event streams are compared
+in memory for display only; Boule does not rewrite their stored bytes or signed
+workspace history.
+
 Use `--mode formalized` or `--mode counterexample` when the query matches more
 than one equally active task. `--instruction` may narrow the route, but the
 agent still has to inspect current work and record its own claim. `--model`,
-`--effort`, and `--max-seconds` are local execution controls, not protocol
-evidence.
+`--effort`, `--max-seconds`, and `--max-tokens` are local execution controls,
+not protocol evidence. `--max-seconds` is enforced by the local supervisor.
+`--max-tokens` is an accounting budget, not a guaranteed cutoff: the structured
+events Boule currently consumes do not expose cumulative usage early enough to
+stop at an exact token boundary.
 
 ## Completion contract
 
@@ -78,7 +92,10 @@ The runtime and protocol planes are intentionally separate:
 - stopping a process never fabricates a release, checkpoint, or handoff.
 
 Token counts and cost appear only when the provider reports them. Cached input
-and reasoning output remain breakdowns rather than being double-counted.
+and reasoning output remain breakdowns rather than being double-counted. A
+recovery run inherits its parent's token budget unless `boule run resume` is
+given a new `--max-tokens` value; the new budget applies independently to that
+recovery turn.
 
 ## Private local state
 
