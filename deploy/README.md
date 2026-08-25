@@ -9,6 +9,12 @@ Docker Engine and Docker Compose v2. A rootless Docker or Podman deployment
 needs an explicit user-namespace ownership design and is not covered by this
 runbook.
 
+If Compose fails before creating containers because its negotiated Docker API
+is below the daemon's minimum, pin the daemon-supported API for that invocation
+(the staging host currently requires `DOCKER_API_VERSION=1.44`). Confirm the
+server API with `docker version` first; do not use this override to hide an
+otherwise unsupported Docker installation.
+
 ## 1. Start the credential-free service
 
 Use a reviewed commit or release, not an untracked copy of another operator's
