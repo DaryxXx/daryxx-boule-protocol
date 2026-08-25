@@ -12,6 +12,7 @@
   var MAX_TIMELINE = 20;
   var MAX_GRAPH_NODES = 30;
   var COLLAPSED_ROSTER_LIMIT = 2;
+  var COLLAPSED_TIMELINE_LIMIT = 4;
   var SVG_NS = "http://www.w3.org/2000/svg";
 
   var els = {
@@ -50,6 +51,7 @@
   var inFlight = false;
   var expandedRosters = Object.create(null);
   var rosterSequence = 0;
+  var timelineExpanded = false;
 
   /* ---------- small helpers ---------- */
 
@@ -761,8 +763,11 @@
   function renderTimeline(problems) {
     var entries = collectActivity(problems);
     clear(els.timelineList);
+    var previousToggle = els.timelineList.parentNode.querySelector(".timeline-toggle");
+    if (previousToggle) previousToggle.remove();
 
     if (entries.length === 0) {
+      timelineExpanded = false;
       els.timelineList.hidden = true;
       showPanel(els.timelineState, "No recent activity in the current snapshot.",
         "Either work has not started or this registry does not publish per-event activity.");
@@ -772,8 +777,10 @@
     els.timelineState.hidden = true;
     els.timelineList.hidden = false;
 
-    entries.slice(0, MAX_TIMELINE).forEach(function (entry) {
+    var extraItems = [];
+    entries.slice(0, MAX_TIMELINE).forEach(function (entry, index) {
       var li = document.createElement("li");
+      if (index >= COLLAPSED_TIMELINE_LIMIT) extraItems.push(li);
       if (entry.when) {
         var t = document.createElement("time");
         t.dateTime = entry.when.toISOString();
@@ -795,6 +802,23 @@
       li.appendChild(body);
       els.timelineList.appendChild(li);
     });
+
+    if (extraItems.length) {
+      var toggle = el("button", "timeline-toggle");
+      toggle.type = "button";
+      toggle.setAttribute("aria-controls", els.timelineList.id);
+
+      function setExpanded(next) {
+        timelineExpanded = next;
+        extraItems.forEach(function (item) { item.hidden = !timelineExpanded; });
+        toggle.setAttribute("aria-expanded", timelineExpanded ? "true" : "false");
+        toggle.textContent = timelineExpanded ? "Show fewer" : "Show " + extraItems.length + " more";
+      }
+
+      toggle.addEventListener("click", function () { setExpanded(!timelineExpanded); });
+      setExpanded(timelineExpanded);
+      els.timelineList.insertAdjacentElement("afterend", toggle);
+    }
   }
 
   /* ---------- dependency graph ---------- */

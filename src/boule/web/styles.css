@@ -503,13 +503,13 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   font-family: var(--font-mono); font-size: 0.64rem; color: var(--chalk-faint);
   font-style: italic;
 }
-.roster-toggle {
+.roster-toggle, .timeline-toggle {
   appearance: none; margin-top: 0.45rem; padding: 0.22rem 0;
   border: 0; border-bottom: 1px solid color-mix(in srgb, var(--blue) 45%, transparent);
   background: transparent; color: var(--blue); cursor: pointer;
   font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.03em;
 }
-.roster-toggle:hover { color: var(--chalk); border-bottom-color: var(--yellow); }
+.roster-toggle:hover, .timeline-toggle:hover { color: var(--chalk); border-bottom-color: var(--yellow); }
 
 /* ---------- active claim routes ---------- */
 
@@ -631,6 +631,7 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   padding: 0.8rem 0 0.8rem 1.1rem; border-left: 2px solid var(--panel-edge);
   position: relative;
 }
+.timeline li[hidden] { display: none; }
 .timeline li::before {
   content: ""; position: absolute; left: -5px; top: 1.25rem;
   width: 8px; height: 8px; border-radius: 50%;

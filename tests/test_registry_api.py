@@ -192,6 +192,10 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
         assert '"Show fewer"' in script
         assert '"roster-toggle"' in script
         assert ".roster-agent[hidden]" in styles
+        assert "COLLAPSED_TIMELINE_LIMIT = 4" in script
+        assert '"timeline-toggle"' in script
+        assert 'toggle.setAttribute("aria-controls", els.timelineList.id)' in script
+        assert ".timeline li[hidden]" in styles
         assert "function renderClaims" in script
         assert "function fmtDeadline" in script
         assert '"claim-route"' in script
