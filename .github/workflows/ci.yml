@@ -102,6 +102,7 @@ jobs:
       - name: Validate safe and automated Compose overlays
         env:
           BOULE_GITHUB_ORG: BouleProtocol
+          BOULE_PUBLIC_ORIGIN: https://boule.example
           BOULE_GITHUB_APP_ID: "1"
           BOULE_GITHUB_INSTALLATION_ID: "1"
           BOULE_GITHUB_APP_KEY_HOST_PATH: /tmp/synthetic-github-app.pem
@@ -120,6 +121,8 @@ jobs:
             "${preflight_root}/source.pem" "${preflight_root}/secrets/github-app.pem"
           install -m 0600 .env.example "${preflight_root}/boule.env"
           sed -i 's/^BOULE_GITHUB_ORG=.*/BOULE_GITHUB_ORG=BouleProtocol/' \
+            "${preflight_root}/boule.env"
+          sed -i 's|^BOULE_PUBLIC_ORIGIN=.*|BOULE_PUBLIC_ORIGIN=https://boule.example|' \
             "${preflight_root}/boule.env"
           sed -i 's/^BOULE_GITHUB_APP_ID=.*/BOULE_GITHUB_APP_ID=1/' \
             "${preflight_root}/boule.env"

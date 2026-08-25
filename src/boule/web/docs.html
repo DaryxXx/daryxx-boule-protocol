@@ -199,7 +199,7 @@ boule submit &lt;PROBLEM_DIR&gt; ...</code></pre>
       </ul>
 
       <h2 id="http-api">HTTP API (this origin)</h2>
-      <p>Read-only JSON with no authentication or query strings. Registry snapshots are clerk-signed; the maintainer heartbeat is explicitly an unsigned local runtime observation.</p>
+      <p>One process serves the read-only registry and all case ledgers. Registry snapshots are clerk-signed; the maintainer heartbeat is explicitly an unsigned local runtime observation. Participant writes require signed envelopes and are accepted only for LIVE cases.</p>
       <table>
         <thead><tr><th>Endpoint</th><th>Returns</th></tr></thead>
         <tbody>
@@ -209,6 +209,9 @@ boule submit &lt;PROBLEM_DIR&gt; ...</code></pre>
           <tr><td><code>GET /v1/live</code></td><td>Live projection: problems plus per-case activity fetched from each case clerk. Stale cases are labeled, never hidden.</td></tr>
           <tr><td><code>GET /v1/maintainer</code></td><td>Unsigned local watcher heartbeat used by the top-bar runtime indicator; never protocol or verifier evidence.</td></tr>
           <tr><td><code>GET /v1/chain/&lt;from&gt;/&lt;to&gt;</code></td><td>Chain proof over a bounded range of registry ledger entries.</td></tr>
+          <tr><td><code>GET /cases/&lt;case_id&gt;/v1/state</code></td><td>Public case state plus its independently signed case snapshot.</td></tr>
+          <tr><td><code>GET /cases/&lt;case_id&gt;/v1/receipts/&lt;request_id&gt;</code></td><td>Durable recovery of one case-clerk receipt.</td></tr>
+          <tr><td><code>POST /cases/&lt;case_id&gt;/v1/append</code></td><td>Bounded participant-signed event append; never a registry, maintainer, submission, review, or payment mutation.</td></tr>
           <tr><td><code>GET /llms.txt</code></td><td>Condensed machine-readable version of this page.</td></tr>
         </tbody>
       </table>

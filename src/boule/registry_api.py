@@ -1,4 +1,4 @@
-"""Read-only registry API, verified live projection, and static observatory."""
+"""Registry, observatory, and optional multi-case ledger HTTP API."""
 
 from __future__ import annotations
 
@@ -18,11 +18,13 @@ from urllib.request import Request, urlopen
 
 from .canonical import canonical_bytes, digest_bytes
 from .case_anchor_store import CaseAnchorStore
-from .errors import ProtocolError
+from .clerk_api import ClerkHTTPError, ClerkService, clerk_get, read_json_body
+from .errors import AuthenticationError, ProtocolError, RequestConflictError, StaleHeadError
 from .model import CASE_ID_RE, parse_time
 from .registry import MAX_CHAIN_PROOF_ENTRIES, Registry
 from .remote_protocol import (
     MAX_CHAIN_PROOF_LINKS,
+    canonical_clerk_url,
     strict_json_bytes,
     verify_chain_proof,
     verify_snapshot,
@@ -49,6 +51,7 @@ STATIC_FILES = {
 
 CaseFetcher = Callable[[dict[str, Any]], dict[str, Any]]
 CaseCheckpoint = Callable[[int, str | None], None]
+CaseServiceLoader = Callable[[str], ClerkService]
 
 
 def maintainer_runtime_status(
@@ -155,16 +158,7 @@ def fetch_case_state(
     clerk_url = record.get("clerk_url")
     if not isinstance(clerk_url, str):
         raise ProtocolError("live case has no clerk URL")
-    parsed = urlsplit(clerk_url)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ProtocolError("case clerk URL is not a safe HTTPS origin")
+    origin = canonical_clerk_url(clerk_url, allow_loopback_http=False)
     if timeout <= 0:
         raise ProtocolError("case clerk timeout must be positive")
     deadline = time.monotonic() + timeout
@@ -175,7 +169,6 @@ def fetch_case_state(
             raise ProtocolError("case clerk verification timed out")
         return value
 
-    origin = clerk_url.rstrip("/")
     value = _fetch_json(origin + "/v1/state", remaining(), MAX_CASE_RESPONSE_BYTES)
     if not isinstance(value, dict) or set(value) != {"state", "snapshot"}:
         raise ProtocolError("case clerk response shape is invalid")
@@ -717,8 +710,10 @@ class RegistryHTTPServer(ThreadingHTTPServer):
         web_root: Path = WEB_ROOT,
         max_workers: int = 32,
         request_timeout: float = 10.0,
+        case_loader: CaseServiceLoader | None = None,
+        max_case_request_bytes: int = 64 * 1024,
     ) -> None:
-        if max_workers < 1 or request_timeout <= 0:
+        if max_workers < 1 or request_timeout <= 0 or max_case_request_bytes < 1:
             raise ProtocolError("registry worker and timeout limits must be positive")
         self.registry = registry
         if live_projector is None:
@@ -734,8 +729,66 @@ class RegistryHTTPServer(ThreadingHTTPServer):
         self.maintainer_status_path = maintainer_status_path
         self.web_root = web_root
         self.request_timeout = request_timeout
+        self.case_loader = case_loader
+        self.max_case_request_bytes = max_case_request_bytes
+        self._case_lock = threading.RLock()
+        self._case_services: dict[str, tuple[tuple[str, str, str], ClerkService]] = {}
         self._worker_slots = threading.BoundedSemaphore(max_workers)
         super().__init__(address, RegistryRequestHandler)
+
+    def case_service(self, case_id: str, *, write: bool) -> ClerkService:
+        """Resolve and cache one independently keyed case inside the shared API."""
+        if self.case_loader is None:
+            raise ClerkHTTPError(
+                HTTPStatus.NOT_FOUND, "case_not_found", "case service does not exist"
+            )
+        self.registry.refresh()
+        try:
+            record = self.registry.problem(case_id)
+        except ProtocolError as exc:
+            raise ClerkHTTPError(
+                HTTPStatus.NOT_FOUND, "case_not_found", "case does not exist"
+            ) from exc
+        status = record.get("status")
+        if write and status != "LIVE":
+            raise ClerkHTTPError(
+                HTTPStatus.CONFLICT,
+                "case_not_live",
+                "case does not accept participant events before activation",
+            )
+        if status not in {"PROVISIONING", "LIVE"} or not isinstance(record.get("clerk_key"), str):
+            raise ClerkHTTPError(
+                HTTPStatus.NOT_FOUND, "case_not_found", "case service is not available"
+            )
+        identity = (
+            str(record["problem_id"]),
+            str(record["task_commitment"]),
+            str(record["clerk_key"]),
+        )
+        with self._case_lock:
+            cached = self._case_services.get(case_id)
+            if cached is not None and cached[0] == identity:
+                return cached[1]
+            try:
+                service = self.case_loader(case_id)
+            except Exception as exc:
+                raise ClerkHTTPError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "case_unavailable",
+                    "case service could not be loaded",
+                ) from exc
+            if (
+                service.problem_id != identity[0]
+                or service.task_commitment != identity[1]
+                or service.clerk_key != identity[2]
+            ):
+                raise ClerkHTTPError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "case_identity_mismatch",
+                    "case service identity does not match the registry",
+                )
+            self._case_services[case_id] = (identity, service)
+            return service
 
     def get_request(self):  # noqa: ANN201
         request, client_address = super().get_request()
@@ -849,14 +902,112 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
         if len(self.path.encode("utf-8", "ignore")) > MAX_PATH_BYTES:
             return None
         parsed = urlsplit(self.path)
-        if parsed.query or parsed.fragment or "%" in parsed.path:
+        if parsed.query or parsed.fragment or "%" in parsed.path or "//" in parsed.path:
             return None
         return tuple(part for part in parsed.path.split("/") if part)
+
+    def _case_target(
+        self, parts: tuple[str, ...], *, write: bool
+    ) -> tuple[ClerkService, tuple[str, ...]] | None:
+        if self.server.case_loader is None:
+            return None
+        if parts[:1] == ("cases",):
+            if len(parts) < 2 or CASE_ID_RE.fullmatch(parts[1]) is None:
+                raise ClerkHTTPError(
+                    HTTPStatus.BAD_REQUEST, "invalid_case_id", "invalid case identifier"
+                )
+            service = self.server.case_service(parts[1], write=write)
+            return service, parts[2:]
+        return None
+
+    def _case_error(self, status: int, code: str, message: str, **details: Any) -> None:
+        self._send_json(status, {"error": {"code": code, "message": message, **details}})
+
+    def _serve_case_get(self, service: ClerkService, parts: tuple[str, ...]) -> None:
+        if not service.acquire_request():
+            self._case_error(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "case_busy",
+                "case service is busy",
+            )
+            return
+        try:
+            self._send_json(HTTPStatus.OK, clerk_get(service, parts))
+        except ClerkHTTPError as exc:
+            self._case_error(exc.status, exc.code, exc.message)
+        except ProtocolError as exc:
+            self._case_error(HTTPStatus.BAD_REQUEST, "invalid_request", str(exc))
+        except Exception:
+            self._case_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "case clerk could not complete the request",
+            )
+        finally:
+            service.release_request()
+
+    def _serve_case_post(self, service: ClerkService, parts: tuple[str, ...]) -> None:
+        if parts != ("v1", "append"):
+            self._case_error(HTTPStatus.NOT_FOUND, "not_found", "endpoint does not exist")
+            return
+        if not service.acquire_request():
+            self._case_error(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "case_busy",
+                "case service is busy",
+            )
+            return
+        try:
+            envelope = read_json_body(self, max_request_bytes=self.server.max_case_request_bytes)
+            result = service.append(envelope)
+            self._send_json(
+                HTTPStatus.CREATED if result["created"] else HTTPStatus.OK,
+                result,
+            )
+        except ClerkHTTPError as exc:
+            self._case_error(exc.status, exc.code, exc.message)
+        except AuthenticationError as exc:
+            self._case_error(HTTPStatus.UNAUTHORIZED, "signature_invalid", str(exc))
+        except StaleHeadError as exc:
+            self._case_error(
+                HTTPStatus.CONFLICT,
+                "stale_head",
+                str(exc),
+                current_head=exc.current_head,
+                event_count=exc.event_count,
+            )
+        except RequestConflictError as exc:
+            self._case_error(HTTPStatus.CONFLICT, "request_id_conflict", str(exc))
+        except ProtocolError as exc:
+            self._case_error(HTTPStatus.UNPROCESSABLE_ENTITY, "event_rejected", str(exc))
+        except Exception:
+            self._case_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "case clerk could not complete the request",
+            )
+        finally:
+            service.release_request()
 
     def do_GET(self) -> None:  # noqa: N802
         parts = self._route()
         if parts is None:
             self._error(HTTPStatus.BAD_REQUEST, "invalid_path", "invalid request path")
+            return
+        try:
+            target = self._case_target(parts, write=False)
+        except ClerkHTTPError as exc:
+            self._case_error(exc.status, exc.code, exc.message)
+            return
+        except ProtocolError:
+            self._case_error(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "case_routing_invalid",
+                "case routing configuration is invalid",
+            )
+            return
+        if target is not None:
+            self._serve_case_get(*target)
             return
         if parts in STATIC_FILES:
             name, content_type = STATIC_FILES[parts]
@@ -869,7 +1020,11 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
                     HTTPStatus.OK,
                     {
                         "ok": True,
-                        "service": "boule-problem-registry",
+                        "service": (
+                            "boule-api"
+                            if self.server.case_loader is not None
+                            else "boule-problem-registry"
+                        ),
                         "snapshot": self.server.registry.signed_snapshot([]),
                     },
                 )
@@ -926,11 +1081,33 @@ class RegistryRequestHandler(BaseHTTPRequestHandler):
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "clerk_unavailable", "clerk unavailable")
 
     def do_POST(self) -> None:  # noqa: N802
+        parts = self._route()
+        if parts is None:
+            self._error(HTTPStatus.BAD_REQUEST, "invalid_path", "invalid request path")
+            return
+        try:
+            target = self._case_target(parts, write=True)
+        except ClerkHTTPError as exc:
+            self._case_error(exc.status, exc.code, exc.message)
+            return
+        except ProtocolError:
+            self._case_error(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "case_routing_invalid",
+                "case routing configuration is invalid",
+            )
+            return
+        if target is not None:
+            self._serve_case_post(*target)
+            return
         self._error(HTTPStatus.METHOD_NOT_ALLOWED, "read_only", "registry is read-only")
 
-    do_PUT = do_POST
-    do_PATCH = do_POST
-    do_DELETE = do_POST
+    def _reject_non_post_mutation(self) -> None:
+        self._error(HTTPStatus.METHOD_NOT_ALLOWED, "method_not_allowed", "method is not allowed")
+
+    do_PUT = _reject_non_post_mutation
+    do_PATCH = _reject_non_post_mutation
+    do_DELETE = _reject_non_post_mutation
 
 
 def build_server(
@@ -944,8 +1121,10 @@ def build_server(
     web_root: Path = WEB_ROOT,
     max_workers: int = 32,
     request_timeout: float = 10.0,
+    case_loader: CaseServiceLoader | None = None,
+    max_case_request_bytes: int = 64 * 1024,
 ) -> RegistryHTTPServer:
-    """Build a read-only server; callers own its lifecycle and TLS proxy."""
+    """Build the registry server, optionally with signed per-case append routes."""
     return RegistryHTTPServer(
         (host, port),
         registry,
@@ -955,4 +1134,6 @@ def build_server(
         web_root=web_root,
         max_workers=max_workers,
         request_timeout=request_timeout,
+        case_loader=case_loader,
+        max_case_request_bytes=max_case_request_bytes,
     )

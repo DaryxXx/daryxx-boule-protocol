@@ -106,7 +106,10 @@ decide whether the now-current action remains semantically valid.
 
 ## HTTP surface
 
-The built-in single-case service exposes:
+The built-in single-case development service exposes these routes at its root.
+The hub's shared API exposes the same contract below
+`/cases/<case_id>` while retaining a separate key, ledger, lock, and receipts
+for every case:
 
 - `GET /healthz` — liveness and public case identity;
 - `GET /v1/state` — public metadata plus a clerk-signed snapshot;

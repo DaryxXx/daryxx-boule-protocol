@@ -1,4 +1,4 @@
-"""Minimal authenticated append API for one trusted-clerk Boule workspace."""
+"""Authenticated case-ledger service and its single-case HTTP adapter."""
 
 from __future__ import annotations
 
@@ -51,6 +51,158 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class ClerkService:
+    """Transport-neutral operations for one case ledger.
+
+    A service owns one ``Workspace`` instance so its in-process lock is shared by
+    every request.  The unified Boule API can host many of these services while
+    retaining one independently signed ledger and key per case.
+    """
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        maintainer_private_key: Any,
+        *,
+        max_workers: int = 8,
+    ) -> None:
+        if max_workers < 1:
+            raise ProtocolError("case worker limit must be positive")
+        self.workspace = workspace
+        self.maintainer_private_key = maintainer_private_key
+        self._request_slots = threading.BoundedSemaphore(max_workers)
+        # Replay the full ledger and prove that the private key matches before a
+        # server advertises the case.
+        workspace.remote_snapshot(_now(), maintainer_private_key)
+
+    def acquire_request(self) -> bool:
+        return self._request_slots.acquire(blocking=False)
+
+    def release_request(self) -> None:
+        self._request_slots.release()
+
+    @property
+    def problem_id(self) -> str:
+        return str(self.workspace.problem["problem_id"])
+
+    @property
+    def clerk_key(self) -> str:
+        return str(self.workspace.config["maintainer_key"])
+
+    @property
+    def task_commitment(self) -> str:
+        task = self.workspace.problem.get("task")
+        if not isinstance(task, dict) or not isinstance(task.get("task_commitment"), str):
+            raise ProtocolError("case service has no task commitment")
+        return str(task["task_commitment"])
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "problem_id": self.problem_id,
+            "service": "trusted-clerk-prototype",
+        }
+
+    def state(self) -> dict[str, Any]:
+        return self.workspace.remote_snapshot(_now(), self.maintainer_private_key)
+
+    def chain(self, from_count: int, to_count: int) -> dict[str, Any]:
+        return self.workspace.remote_chain_proof(from_count, to_count, self.maintainer_private_key)
+
+    def receipt(self, request_id: str) -> dict[str, Any] | None:
+        return self.workspace.remote_receipt(request_id, self.maintainer_private_key)
+
+    def append(self, envelope: Any) -> dict[str, Any]:
+        if isinstance(envelope, dict) and envelope.get("kind") in MAINTAINER_EVENTS:
+            raise ClerkHTTPError(
+                HTTPStatus.FORBIDDEN,
+                "maintainer_event_forbidden",
+                "remote clients may append participant events only",
+            )
+        result = self.workspace.append_envelope(envelope, self.maintainer_private_key)
+        return {
+            "created": result["created"],
+            "event": _public_event(result["event"]),
+            "receipt": result["receipt"],
+        }
+
+
+def clerk_get(service: ClerkService, parts: list[str] | tuple[str, ...]) -> dict[str, Any]:
+    """Dispatch one normalized case GET route without coupling it to a server."""
+    route = tuple(parts)
+    if route == ("healthz",):
+        return service.health()
+    if route == ("v1", "state"):
+        return service.state()
+    if len(route) == 4 and route[:2] == ("v1", "chain"):
+        try:
+            from_count = int(route[2])
+            to_count = int(route[3])
+        except ValueError as exc:
+            raise ProtocolError("chain proof counts must be integers") from exc
+        return service.chain(from_count, to_count)
+    if len(route) == 3 and route[:2] == ("v1", "receipts"):
+        request_id = _request_id(route[2])
+        receipt = service.receipt(request_id)
+        if receipt is None:
+            raise ClerkHTTPError(
+                HTTPStatus.NOT_FOUND,
+                "receipt_not_found",
+                "no durable receipt exists for this request id",
+            )
+        return {"receipt": receipt}
+    raise ClerkHTTPError(HTTPStatus.NOT_FOUND, "not_found", "endpoint does not exist")
+
+
+def read_json_body(
+    handler: BaseHTTPRequestHandler, *, max_request_bytes: int = MAX_REQUEST_BYTES
+) -> Any:
+    """Read one strict, bounded JSON request body from an HTTP handler."""
+    if handler.headers.get_all("Transfer-Encoding", failobj=[]):
+        raise ClerkHTTPError(
+            HTTPStatus.BAD_REQUEST,
+            "transfer_encoding_unsupported",
+            "Transfer-Encoding is not supported",
+        )
+    encodings = handler.headers.get_all("Content-Encoding", failobj=[])
+    if encodings and any(value.lower().strip() != "identity" for value in encodings):
+        raise ClerkHTTPError(
+            HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+            "content_encoding_unsupported",
+            "compressed request bodies are not supported",
+        )
+    media = handler.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    if media != "application/json":
+        raise ClerkHTTPError(
+            HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+            "content_type_required",
+            "Content-Type must be application/json",
+        )
+    lengths = handler.headers.get_all("Content-Length", failobj=[])
+    if len(lengths) != 1 or not lengths[0].isdigit():
+        raise ClerkHTTPError(
+            HTTPStatus.LENGTH_REQUIRED,
+            "content_length_required",
+            "one decimal Content-Length header is required",
+        )
+    length = int(lengths[0])
+    if length <= 0:
+        raise ClerkHTTPError(HTTPStatus.BAD_REQUEST, "empty_body", "request body must not be empty")
+    if length > max_request_bytes:
+        raise ClerkHTTPError(
+            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            "body_too_large",
+            f"request body exceeds {max_request_bytes} bytes",
+        )
+    raw = handler.rfile.read(length)
+    if len(raw) != length:
+        raise ClerkHTTPError(HTTPStatus.BAD_REQUEST, "incomplete_body", "request body ended early")
+    try:
+        return strict_json_bytes(raw)
+    except ProtocolError as exc:
+        raise ClerkHTTPError(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc)) from exc
+
+
 class ClerkHTTPServer(ThreadingHTTPServer):
     """One-process prototype server; durable ordering lives in ``Workspace``."""
 
@@ -71,6 +223,7 @@ class ClerkHTTPServer(ThreadingHTTPServer):
             raise ProtocolError("clerk worker and timeout limits must be positive")
         self.workspace = workspace
         self.maintainer_private_key = maintainer_private_key
+        self.service = ClerkService(workspace, maintainer_private_key, max_workers=max_workers)
         self.max_request_bytes = max_request_bytes
         self.request_timeout = request_timeout
         self._worker_slots = threading.BoundedSemaphore(max_workers)
@@ -150,54 +303,11 @@ class ClerkRequestHandler(BaseHTTPRequestHandler):
         if route is None:
             self._error(HTTPStatus.BAD_REQUEST, "invalid_path", "query strings are not supported")
             return
-        path, parts = route
+        _path, parts = route
         try:
-            if path == "/healthz":
-                self._send(
-                    HTTPStatus.OK,
-                    {
-                        "ok": True,
-                        "problem_id": self.server.workspace.problem["problem_id"],
-                        "service": "trusted-clerk-prototype",
-                    },
-                )
-                return
-            if path == "/v1/state":
-                self._send(
-                    HTTPStatus.OK,
-                    self.server.workspace.remote_snapshot(
-                        _now(), self.server.maintainer_private_key
-                    ),
-                )
-                return
-            if len(parts) == 4 and parts[:2] == ["v1", "chain"]:
-                try:
-                    from_count = int(parts[2])
-                    to_count = int(parts[3])
-                except ValueError as exc:
-                    raise ProtocolError("chain proof counts must be integers") from exc
-                self._send(
-                    HTTPStatus.OK,
-                    self.server.workspace.remote_chain_proof(
-                        from_count, to_count, self.server.maintainer_private_key
-                    ),
-                )
-                return
-            if len(parts) == 3 and parts[:2] == ["v1", "receipts"]:
-                request_id = _request_id(parts[2])
-                receipt = self.server.workspace.remote_receipt(
-                    request_id, self.server.maintainer_private_key
-                )
-                if receipt is None:
-                    self._error(
-                        HTTPStatus.NOT_FOUND,
-                        "receipt_not_found",
-                        "no durable receipt exists for this request id",
-                    )
-                    return
-                self._send(HTTPStatus.OK, {"receipt": receipt})
-                return
-            self._error(HTTPStatus.NOT_FOUND, "not_found", "endpoint does not exist")
+            self._send(HTTPStatus.OK, clerk_get(self.server.service, parts))
+        except ClerkHTTPError as exc:
+            self._error(exc.status, exc.code, exc.message)
         except ProtocolError as exc:
             self._error(HTTPStatus.BAD_REQUEST, "invalid_request", str(exc))
         except Exception:
@@ -208,53 +318,7 @@ class ClerkRequestHandler(BaseHTTPRequestHandler):
             )
 
     def _read_json_body(self) -> Any:
-        if self.headers.get_all("Transfer-Encoding", failobj=[]):
-            raise _HTTPFailure(
-                HTTPStatus.BAD_REQUEST,
-                "transfer_encoding_unsupported",
-                "Transfer-Encoding is not supported",
-            )
-        encodings = self.headers.get_all("Content-Encoding", failobj=[])
-        if encodings and any(value.lower().strip() != "identity" for value in encodings):
-            raise _HTTPFailure(
-                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-                "content_encoding_unsupported",
-                "compressed request bodies are not supported",
-            )
-        media = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        if media != "application/json":
-            raise _HTTPFailure(
-                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-                "content_type_required",
-                "Content-Type must be application/json",
-            )
-        lengths = self.headers.get_all("Content-Length", failobj=[])
-        if len(lengths) != 1 or not lengths[0].isdigit():
-            raise _HTTPFailure(
-                HTTPStatus.LENGTH_REQUIRED,
-                "content_length_required",
-                "one decimal Content-Length header is required",
-            )
-        length = int(lengths[0])
-        if length <= 0:
-            raise _HTTPFailure(
-                HTTPStatus.BAD_REQUEST, "empty_body", "request body must not be empty"
-            )
-        if length > self.server.max_request_bytes:
-            raise _HTTPFailure(
-                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                "body_too_large",
-                f"request body exceeds {self.server.max_request_bytes} bytes",
-            )
-        raw = self.rfile.read(length)
-        if len(raw) != length:
-            raise _HTTPFailure(
-                HTTPStatus.BAD_REQUEST, "incomplete_body", "request body ended early"
-            )
-        try:
-            return strict_json_bytes(raw)
-        except ProtocolError as exc:
-            raise _HTTPFailure(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc)) from exc
+        return read_json_body(self, max_request_bytes=self.server.max_request_bytes)
 
     def do_POST(self) -> None:  # noqa: N802
         route = self._route()
@@ -263,25 +327,12 @@ class ClerkRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             envelope = self._read_json_body()
-            if isinstance(envelope, dict) and envelope.get("kind") in MAINTAINER_EVENTS:
-                self._error(
-                    HTTPStatus.FORBIDDEN,
-                    "maintainer_event_forbidden",
-                    "remote clients may append participant events only",
-                )
-                return
-            result = self.server.workspace.append_envelope(
-                envelope, self.server.maintainer_private_key
-            )
+            result = self.server.service.append(envelope)
             self._send(
                 HTTPStatus.CREATED if result["created"] else HTTPStatus.OK,
-                {
-                    "created": result["created"],
-                    "event": _public_event(result["event"]),
-                    "receipt": result["receipt"],
-                },
+                result,
             )
-        except _HTTPFailure as exc:
+        except ClerkHTTPError as exc:
             self._error(exc.status, exc.code, exc.message)
         except AuthenticationError as exc:
             self._error(HTTPStatus.UNAUTHORIZED, "signature_invalid", str(exc))
@@ -305,7 +356,7 @@ class ClerkRequestHandler(BaseHTTPRequestHandler):
             )
 
 
-class _HTTPFailure(Exception):
+class ClerkHTTPError(Exception):
     def __init__(self, status: int, code: str, message: str) -> None:
         super().__init__(message)
         self.status = status
@@ -323,8 +374,6 @@ def build_server(
     max_workers: int = 16,
     request_timeout: float = 10.0,
 ) -> ClerkHTTPServer:
-    # Replay and verify the complete ledger before the listening socket exists.
-    workspace.remote_snapshot(_now(), maintainer_private_key)
     return ClerkHTTPServer(
         (host, port),
         workspace,

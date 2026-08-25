@@ -10,6 +10,8 @@ services:
       - "30"
       - --auto-admit
       - --auto-provision
+      - --clerk-url-template
+      - ${BOULE_PUBLIC_ORIGIN:?set BOULE_PUBLIC_ORIGIN}/cases/{case_id}
       - --provider
       - github-app
       - --visibility

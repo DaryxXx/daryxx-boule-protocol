@@ -26,7 +26,7 @@ from .canonical import canonical_bytes, digest_object
 from .crypto import load_public_key, public_key_text, sign_object, verify_object
 from .errors import ProtocolError
 from .model import CASE_ID_RE, parse_time
-from .remote_protocol import strict_json_bytes
+from .remote_protocol import canonical_clerk_url, strict_json_bytes
 from .repository_migration import REF_MANIFEST_SCHEMA, validate_ref_manifest
 
 REGISTRY_SCHEMA = "boule-problem-registry/0.6"
@@ -820,6 +820,7 @@ class Registry:
         received_at: str | None = None,
     ) -> dict[str, Any]:
         head_event_hash, event_count = _case_evidence(head_event_hash, event_count)
+        clerk_url = canonical_clerk_url(clerk_url, allow_loopback_http=False)
         self._append(
             "live",
             {

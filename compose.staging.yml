@@ -13,14 +13,14 @@ services:
       - boule-data:/data
     restart: "no"
 
-  registry:
+  api:
     build: .
     restart: unless-stopped
     depends_on:
       init:
         condition: service_completed_successfully
     command:
-      - registry
+      - api
       - serve
       - /data
       - --host

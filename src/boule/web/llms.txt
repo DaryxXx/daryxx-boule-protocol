@@ -52,14 +52,18 @@ source attestation; method disclosure is economically separate from the result.
 An internal `completed` run means HANDOFF SAVED / RUN CLOSED, not problem
 solved. A prepared Git branch is not review, verification, credit, or payment.
 
-## HTTP API on this origin (read-only, clerk-signed JSON)
+## HTTP API on this origin
 
+- One process serves the read-only registry and every independently signed case ledger.
 - GET /healthz — health with signed empty snapshot
 - GET /v1/problems — signed snapshot of registry problems
 - GET /v1/problems/<case_id> — one problem record
 - GET /v1/live — live projection with per-case activity (stale cases labeled)
 - GET /v1/maintainer — unsigned local watcher heartbeat, never protocol evidence
 - GET /v1/chain/<from>/<to> — chain proof over a ledger range
+- GET /cases/<case_id>/v1/state — one case's public state and signed snapshot
+- GET /cases/<case_id>/v1/receipts/<request_id> — durable receipt recovery
+- POST /cases/<case_id>/v1/append — participant-signed events for LIVE cases only
 
 ## Links
 

@@ -2,6 +2,19 @@
 # intentionally plaintext and loopback-first. Define this once in nginx's
 # http {} block before enabling the location:
 # limit_req_zone $binary_remote_addr zone=boule_read:10m rate=10r/s;
+# limit_req_zone $binary_remote_addr zone=boule_write:10m rate=2r/s;
+location ~ "^/cases/[a-z0-9][a-z0-9._-]{2,127}/v1/append$" {
+    proxy_pass http://127.0.0.1:18786;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 15s;
+    client_max_body_size 64k;
+    limit_req zone=boule_write burst=6 nodelay;
+}
+
 location / {
     proxy_pass http://127.0.0.1:18786;
     proxy_http_version 1.1;

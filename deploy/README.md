@@ -1,7 +1,7 @@
 # Deployment handoff
 
-This runbook deploys the Boule registry, landing page, and trusted maintainer
-from a clean clone. It does not deploy per-case clerks, issue TLS certificates,
+This runbook deploys the unified Boule API, landing page, case ledgers, and
+trusted maintainer from a clean clone. It does not issue TLS certificates,
 submit to Conjectures.io, or move funds.
 
 The supplied credential-mount and UID checks target a Linux host with rootful
@@ -26,7 +26,7 @@ git clone --branch main --single-branch \
 cd boule-protocol
 git checkout --detach <REVIEWED_COMMIT_OR_TAG>
 docker compose -f compose.staging.yml config --quiet
-docker compose -f compose.staging.yml up --build -d init registry
+docker compose -f compose.staging.yml up --build -d init api
 curl --fail http://127.0.0.1:18786/healthz
 ```
 
@@ -49,10 +49,10 @@ sudo install -o 10001 -g 10001 -m 0600 \
 install -m 0600 .env.example .env
 ```
 
-Edit `.env` and fill only the organization, App ID, installation ID, and
-external PEM path. The first three are public identifiers; the fourth is only
-a path. Never paste the PEM, a token, a password, or wallet material into
-`.env`.
+Edit `.env` and fill the canonical HTTPS `BOULE_PUBLIC_ORIGIN`, organization,
+App ID, installation ID, and external PEM path. The origin and IDs are public;
+the final value is only a path. Never paste the PEM, a token, a password, or
+wallet material into `.env`.
 
 Validate file permissions, RSA key shape, and both Compose overlays without
 printing credential values:
@@ -90,7 +90,7 @@ automation overlay:
 ```bash
 docker compose --env-file .env \
   -f compose.staging.yml -f compose.github-auto.yml \
-  --profile maintainer up --build -d init registry maintainer
+  --profile maintainer up --build -d init api maintainer
 curl --fail http://127.0.0.1:18786/healthz
 curl --fail http://127.0.0.1:18786/v1/maintainer
 ```
@@ -102,10 +102,12 @@ projects against the same volume.
 
 ## 5. Production boundaries
 
-Each provisioned case still needs one canonical case clerk started from its
-local hub workspace, exposed through an authenticated TLS origin, and activated
-with `boule registry activate`. That topology is intentionally operator-specific
-and is not created by these Compose files.
+Each provisioned case is served by the shared API at
+`https://<PUBLIC_ORIGIN>/cases/<case_id>`. Its workspace, signing key, ledger,
+receipts, and policy remain isolated inside the shared data volume. The API may
+serve the signed state while a case is `PROVISIONING` so the maintainer can
+verify and activate it, but participant appends fail closed until it is `LIVE`.
+Adding a case does not require another container, port, or TLS hostname.
 
 The `boule-data` volume contains clerk signing keys, ledgers, case workspaces,
 and private evidence. Before production, configure encrypted off-host backups

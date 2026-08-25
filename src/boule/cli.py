@@ -27,6 +27,7 @@ from .agent_runner import (
 from .artifact_promotion import promote_run_artifacts
 from .canonical import canonical_bytes
 from .case_scaffold import write_case_support_files
+from .clerk_api import ClerkService
 from .clerk_api import build_server as build_clerk_server
 from .community import CommunityLedger, replay_community_ledger
 from .community_demo import (
@@ -1263,6 +1264,48 @@ def _registry_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _api_serve(args: argparse.Namespace) -> int:
+    if not 0 <= args.port <= 65535:
+        raise ProtocolError("API port must be between 0 and 65535")
+    if args.host not in {"127.0.0.1", "::1", "localhost"} and not args.allow_insecure_bind:
+        raise ProtocolError(
+            "non-loopback bind requires --allow-insecure-bind and a separate TLS proxy"
+        )
+    hub = Hub(args.registry)
+
+    def load_case(case_id: str) -> ClerkService:
+        workspace = hub.case_workspace(case_id)
+        return ClerkService(workspace, load_maintainer_key(workspace))
+
+    server = build_registry_server(
+        hub.registry,
+        args.host,
+        args.port,
+        case_loader=load_case,
+    )
+    host, port = server.server_address[:2]
+    _print(
+        {
+            "listening": f"http://{host}:{port}",
+            "mode": "trusted-boule-api",
+            "registry_key": hub.registry.clerk_key,
+            "registry_mutations_exposed": False,
+            "case_mutations_exposed": ["signed_participant_events"],
+            "case_path_template": "/cases/{case_id}",
+            "tls_built_in": False,
+        },
+        args.json,
+    )
+    sys.stdout.flush()
+    try:
+        server.serve_forever(poll_interval=0.25)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
 def _problems(args: argparse.Namespace) -> int:
     result = fetch_registry_index(
         args.server,
@@ -1973,6 +2016,20 @@ def build_parser() -> argparse.ArgumentParser:
     registry_serve.add_argument("--allow-insecure-bind", action="store_true")
     registry_serve.add_argument("--json", action="store_true", help="emit compact JSON")
     registry_serve.set_defaults(handler=_registry_serve)
+
+    api = subparsers.add_parser(
+        "api", help="serve the registry, observatory, and every case ledger"
+    )
+    api_commands = api.add_subparsers(dest="api_command", required=True)
+    api_serve = api_commands.add_parser(
+        "serve", help="serve one multi-case Boule API behind a TLS proxy"
+    )
+    api_serve.add_argument("registry", help="registry runtime directory")
+    api_serve.add_argument("--host", default="127.0.0.1")
+    api_serve.add_argument("--port", type=int, default=8786)
+    api_serve.add_argument("--allow-insecure-bind", action="store_true")
+    api_serve.add_argument("--json", action="store_true", help="emit compact JSON")
+    api_serve.set_defaults(handler=_api_serve)
 
     def server_argument(command: argparse.ArgumentParser) -> None:
         command.add_argument(

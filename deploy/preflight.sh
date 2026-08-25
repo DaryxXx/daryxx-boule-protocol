@@ -28,6 +28,7 @@ read_setting() {
   printf '%s' "${boule_setting_value}"
 }
 
+boule_public_origin="$(read_setting BOULE_PUBLIC_ORIGIN)"
 boule_github_org="$(read_setting BOULE_GITHUB_ORG)"
 boule_github_app_id="$(read_setting BOULE_GITHUB_APP_ID)"
 boule_github_installation_id="$(read_setting BOULE_GITHUB_INSTALLATION_ID)"
@@ -35,6 +36,8 @@ boule_key_path="$(read_setting BOULE_GITHUB_APP_KEY_HOST_PATH)"
 
 [[ "${boule_github_org}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]] \
   || fail "BOULE_GITHUB_ORG is invalid"
+[[ "${boule_public_origin}" =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$ ]] \
+  || fail "BOULE_PUBLIC_ORIGIN must be an HTTPS origin without a path or trailing slash"
 [[ "${boule_github_app_id}" =~ ^[0-9]+$ ]] \
   || fail "BOULE_GITHUB_APP_ID must be numeric"
 [[ "${boule_github_installation_id}" =~ ^[0-9]+$ ]] \

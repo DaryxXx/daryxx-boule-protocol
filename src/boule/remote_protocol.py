@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from .canonical import digest_object
 from .crypto import load_public_key, public_key_text, sign_object, verify_object
@@ -17,6 +19,7 @@ RECEIPT_SCHEMA = "boule-workspace-clerk-receipt/0.5"
 SNAPSHOT_SCHEMA = "boule-workspace-clerk-snapshot/0.5"
 CHAIN_PROOF_SCHEMA = "boule-workspace-chain-proof/0.6"
 MAX_CHAIN_PROOF_LINKS = 256
+SAFE_CLERK_PATH_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 ENVELOPE_FIELDS = {
     "schema",
@@ -29,6 +32,48 @@ ENVELOPE_FIELDS = {
     "payload",
     "signature",
 }
+
+
+def canonical_clerk_url(value: Any, *, allow_loopback_http: bool) -> str:
+    """Validate one clerk base URL and remove only a trailing slash.
+
+    Existing deployments may use a dedicated origin or a safe path prefix. The
+    returned value is suitable for appending ``/v1/...`` without ambiguous URL
+    normalization.
+    """
+    if not isinstance(value, str) or not value or value != value.strip() or len(value) > 2_048:
+        raise ProtocolError("remote clerk URL is required")
+    parsed = urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ProtocolError("remote clerk URL has an invalid port") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or "%" in parsed.path
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        raise ProtocolError(
+            "remote clerk URL must be an unambiguous HTTP(S) URL without credentials"
+        )
+    if parsed.scheme == "http" and (
+        not allow_loopback_http or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+    ):
+        raise ProtocolError("remote clerk HTTP is allowed only on loopback; use HTTPS remotely")
+    if parsed.path not in {"", "/"}:
+        segments = parsed.path.rstrip("/").split("/")[1:]
+        if (
+            "//" in parsed.path
+            or not segments
+            or any(SAFE_CLERK_PATH_SEGMENT.fullmatch(segment) is None for segment in segments)
+        ):
+            raise ProtocolError("remote clerk URL has an invalid path")
+    return value.rstrip("/")
 
 
 def strict_json_bytes(raw: bytes) -> Any:

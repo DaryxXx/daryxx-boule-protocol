@@ -7,6 +7,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_ENV_KEYS = {
+    "BOULE_PUBLIC_ORIGIN",
     "BOULE_GITHUB_APP_ID",
     "BOULE_GITHUB_APP_KEY_HOST_PATH",
     "BOULE_GITHUB_INSTALLATION_ID",
@@ -28,6 +29,7 @@ def test_env_example_contains_configuration_not_secret_material() -> None:
         settings[key] = value
 
     assert settings.keys() == EXPECTED_ENV_KEYS
+    assert settings["BOULE_PUBLIC_ORIGIN"] == ""
     assert settings["BOULE_GITHUB_ORG"] == ""
     assert settings["BOULE_GITHUB_APP_ID"] == ""
     assert settings["BOULE_GITHUB_INSTALLATION_ID"] == ""

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .canonical import canonical_bytes
@@ -22,6 +22,7 @@ from .errors import ProtocolError, RemoteTransportError, RequestConflictError, S
 from .remote_protocol import (
     EVENT_SCHEMA,
     build_envelope,
+    canonical_clerk_url,
     strict_json_bytes,
     verify_receipt,
     verify_snapshot,
@@ -56,22 +57,7 @@ def _utc_now() -> str:
 
 
 def _server_origin(value: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ProtocolError("remote clerk URL is required")
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in {"", "/"}
-    ):
-        raise ProtocolError("remote clerk URL must be an HTTP(S) origin without credentials")
-    if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
-        raise ProtocolError("remote clerk HTTP is allowed only on loopback; use HTTPS remotely")
-    return value.rstrip("/")
+    return canonical_clerk_url(value, allow_loopback_http=True)
 
 
 def _private_directory(path: Path) -> Path:

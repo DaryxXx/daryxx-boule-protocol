@@ -125,19 +125,23 @@ operators must not edit the event or silently repoint the current fields.
 
 ## Case-clerk and API boundary
 
-The registry HTTP service is read-only. It publishes signed registry snapshots,
-bounded redacted hash-link extension proofs, and a static observatory; proof
-responses contain sequence/hash/signature links, not intake event payloads.
-Registry mutations remain maintainer-local. The CLI's TOFU store persists the
-registry key plus its last accepted count/head, rejecting rollback and
-requiring a valid extension proof before advancing that high-water mark.
+One HTTP process serves the registry, static observatory, and all case-ledger
+routes. Registry routes are read-only: they publish signed snapshots, bounded
+redacted hash-link extension proofs, and no intake event payloads. Registry
+mutations remain maintainer-local. The CLI's TOFU store persists the registry
+key plus its last accepted count/head, rejecting rollback and requiring a valid
+extension proof before advancing that high-water mark.
 
-Each `LIVE` case has its own trusted-clerk service. The v0.5 case API exposes
-only public state/health, durable receipt recovery, and participant-signed
-append requests. The client signs its own exact envelope; the clerk serializes
-accepted events and signs a receipt. The API has no remote endpoint for
-maintainer observations, external submission, verifier/reviewer feedback,
-finalization, wallet action, allocation, or payment.
+Cases are mounted at `/cases/<case_id>`. Each retains its own workspace lock,
+ledger, receipts, policy, and trusted-clerk signing key even though the HTTP
+listener and process are shared. A `PROVISIONING` case exposes signed reads so
+activation can verify its identity; participant appends are admitted only once
+the registry marks it `LIVE`. The v0.5 case routes expose public state/health,
+durable receipt recovery, and participant-signed append requests. The client
+signs its own exact envelope; the logical case clerk serializes accepted events
+and signs a receipt. No remote endpoint exists for maintainer observations,
+external submission, verifier/reviewer feedback, finalization, wallet action,
+allocation, or payment.
 
 The observatory bounds concurrent case fetches and persists each verified case
 chain chunk in a private high-water store. A slow long-lived case may be shown
@@ -145,9 +149,10 @@ as stale for one refresh, but the next refresh or process restart resumes from
 the last durable verified chunk. A stored rollback, same-height fork, or case
 identity replacement fails closed.
 
-Deploy a remote clerk only behind authenticated TLS and suitable rate limits.
-The bundled services are single-clerk prototypes, not multi-host consensus or
-high-availability infrastructure.
+Deploy the API only behind authenticated TLS and suitable read/write rate
+limits. Sharing one process removes per-case container and hostname growth, but
+also creates one availability boundary and keeps all case keys in the protected
+hub volume. It is not multi-host consensus or high-availability infrastructure.
 
 ## Relationship to the case protocol
 
@@ -187,8 +192,8 @@ and applicable case terms.
    intake only.
 2. Revalidate its pinned identity before admitting it.
 3. Provision one isolated case repository with the minimal GitHub App.
-4. Start the case clerk behind authenticated TLS, then activate only after its
-   signed snapshot verifies against the recorded clerk key.
+4. Expose the shared API behind authenticated TLS, then activate the case path
+   only after its signed snapshot verifies against the recorded clerk key.
 5. Use the case protocol and its disclosure policy for collaboration,
    submission observations, review, and any allocation discussion.
 6. Use written terms and qualified legal review for IP, confidentiality,

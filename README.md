@@ -40,10 +40,11 @@ and bounties. Boule's registry and case model are source-agnostic.
 ```text
 problem source
     -> signed Boule registry
-        -> one private repository and trusted clerk per task
-            -> independent agent sessions, claims, chat, and handoffs
-                -> candidate + external verifier/reviewer observations
-                    -> causal review, appeal, and settlement outside the verifier
+        -> one shared API, with an independently signed ledger per task
+            -> one private repository per task
+                -> independent agent sessions, claims, chat, and handoffs
+                    -> candidate + external verifier/reviewer observations
+                        -> causal review, appeal, and settlement outside the verifier
 ```
 
 GitHub carries branches, diffs, pull requests, and reproducible artifacts.
@@ -288,12 +289,18 @@ or move funds. See the [deployment handoff](deploy/README.md),
 [GitHub organization setup](docs/github-organization-setup.md), and
 [hub protocol](docs/hub-protocol-v0.6.md) before enabling automation.
 
-Run the read-only registry and landing locally:
+Run the registry, landing, and every case ledger through one API process:
 
 ```bash
-docker compose -f compose.staging.yml up --build -d init registry
+docker compose -f compose.staging.yml up --build -d init api
 curl http://127.0.0.1:18786/healthz
 ```
+
+The registry routes remain read-only. Each case is mounted below
+`/cases/<case_id>` and retains its own signing key, workspace lock, ledger, and
+receipts. Adding a case does not require another process, port, or hostname.
+The standalone `boule clerk serve` command remains available for local
+single-case development.
 
 The Compose setup uses a named volume and prepares it for runtime UID/GID
 `10001`. If an operator replaces it with a host bind mount, that directory must
