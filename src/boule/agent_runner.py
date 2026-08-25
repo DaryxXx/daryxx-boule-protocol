@@ -625,11 +625,14 @@ Before research:
 {claim_step}
 
 During work, record only real reusable progress. Use `boule agent checkpoint --help`
-when you have evidence. You must finish with `boule agent handoff --help` and publish
-an honest ADVANCE, NEGATIVE, or NO_SIGNAL handoff. A failed route is useful only with
-a reproducible falsifier, boundary, or negative result. Attach every local file needed
-by the next researcher with `--artifact`; Boule privately retains only those exact,
-signed bytes for later human-gated Git promotion.
+when you have evidence. For work longer than the current claim lease, use
+`boule agent heartbeat --help` and renew before its displayed deadline with an honest
+progress commitment; a heartbeat is liveness, not research credit. You must finish with
+`boule agent handoff --help` and publish an honest ADVANCE, NEGATIVE, or NO_SIGNAL
+handoff. A failed route is useful only with a reproducible falsifier, boundary, or
+negative result. Attach every local file needed by the next researcher with `--artifact`;
+Boule privately retains only those exact, signed bytes for later human-gated Git
+promotion.
 
 Do not push Git, contact Conjectures.io, submit a bounty, pay, use wallets, expose
 credentials, or read/copy private session key material directly. Boule CLI commands

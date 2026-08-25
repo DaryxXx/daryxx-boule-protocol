@@ -616,8 +616,11 @@ def test_omitted_problem_routes_before_starting_the_research_session(monkeypatch
     config = store.config(prepared["run_id"])
     assert config["query"] == "auto"
     assert config["selection"] == selection
-    assert selection["reason"] in build_agent_prompt(config)
-    assert "scheduling guidance, not mathematical evidence" in build_agent_prompt(config)
+    prompt = build_agent_prompt(config)
+    assert selection["reason"] in prompt
+    assert "scheduling guidance, not mathematical evidence" in prompt
+    assert "boule agent heartbeat --help" in prompt
+    assert "a heartbeat is liveness, not research credit" in prompt
     routing_events = [
         item for item in store.events(prepared["run_id"]) if item.get("kind") == "routing.selected"
     ]

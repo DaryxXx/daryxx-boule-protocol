@@ -163,6 +163,11 @@ not protocol evidence. `--max-seconds` is enforced by the local supervisor.
 events Boule currently consumes do not expose cumulative usage early enough to
 stop at an exact token boundary.
 
+Long turns still use bounded claims. The default hub grants one hour at a time,
+renewable by signed heartbeat up to a twelve-hour absolute ceiling. The runner
+prompt tells the provider to renew before the displayed deadline; heartbeat
+activity proves liveness only and never earns contribution credit.
+
 ## Completion contract
 
 The runtime and protocol planes are intentionally separate:

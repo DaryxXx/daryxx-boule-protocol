@@ -119,12 +119,45 @@ def test_initialize_creates_private_control_plane_and_signed_registry(tmp_path: 
 
     assert hub.registry.count == 1
     assert hub.config["case_config"] == DEFAULT_CASE_CONFIG
+    assert hub.config["case_config"] == {
+        "lease_seconds": 3600,
+        "absolute_lease_seconds": 43200,
+        "stale_seconds": 900,
+        "max_renewals": 11,
+    }
     assert (hub.root / "intake").is_dir()
     assert (hub.root / "cases").is_dir()
     assert (hub.control / "config.json").stat().st_mode & 0o777 == 0o644
     assert hub.key_path.stat().st_mode & 0o777 == 0o600
     with pytest.raises(FileExistsError):
         Hub.initialize(hub.root)
+
+
+def test_existing_hub_accepts_legacy_shorter_case_lease(tmp_path: Path) -> None:
+    hub = Hub.initialize(tmp_path / "hub")
+    config = json.loads(hub.config_path.read_text(encoding="utf-8"))
+    config["case_config"] = {
+        "lease_seconds": 3600,
+        "absolute_lease_seconds": 14400,
+        "stale_seconds": 900,
+        "max_renewals": 3,
+    }
+    hub.config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    reopened = Hub(hub.root)
+
+    assert reopened.config["case_config"]["absolute_lease_seconds"] == 14400
+
+
+def test_hub_rejects_case_lease_above_twelve_hours(tmp_path: Path) -> None:
+    hub = Hub.initialize(tmp_path / "hub")
+    config = json.loads(hub.config_path.read_text(encoding="utf-8"))
+    config["case_config"]["absolute_lease_seconds"] = 43201
+    config["case_config"]["max_renewals"] = 12
+    hub.config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ProtocolError, match="lease bounds"):
+        Hub(hub.root)
 
 
 def test_propose_deduplicates_by_commitment_and_admit_reimports_independently(

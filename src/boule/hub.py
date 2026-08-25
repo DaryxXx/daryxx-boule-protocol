@@ -28,14 +28,41 @@ from .repository_migration import verify_local_to_github_mirror
 from .workspace import Workspace
 
 HUB_SCHEMA = "boule-hub/0.6"
+MAX_CASE_ABSOLUTE_LEASE_SECONDS = 12 * 3600
 DEFAULT_CASE_CONFIG = {
     "lease_seconds": 3600,
-    "absolute_lease_seconds": 14400,
+    "absolute_lease_seconds": MAX_CASE_ABSOLUTE_LEASE_SECONDS,
     "stale_seconds": 900,
-    "max_renewals": 3,
+    "max_renewals": 11,
 }
 SAFE_CASE_ID = re.compile(r"[a-z0-9][a-z0-9._-]{2,127}\Z")
 CaseStateFetcher = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def _validate_case_config(value: Any) -> None:
+    required = {
+        "lease_seconds",
+        "absolute_lease_seconds",
+        "stale_seconds",
+        "max_renewals",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise ProtocolError("hub case config has invalid fields")
+    invalid_types = (
+        isinstance(value[field], bool) or not isinstance(value[field], int) for field in required
+    )
+    if any(invalid_types):
+        raise ProtocolError("hub case config values must be integers")
+    lease = value["lease_seconds"]
+    absolute = value["absolute_lease_seconds"]
+    stale = value["stale_seconds"]
+    renewals = value["max_renewals"]
+    if not 60 <= lease <= absolute <= MAX_CASE_ABSOLUTE_LEASE_SECONDS:
+        raise ProtocolError("hub case lease bounds are invalid")
+    if not 1 <= stale < lease:
+        raise ProtocolError("hub case stale threshold is invalid")
+    if not 0 <= renewals <= 32 or lease * (renewals + 1) < absolute:
+        raise ProtocolError("hub case renewal bounds are invalid")
 
 
 def _write_json(path: Path, value: dict[str, Any], *, mode: int = 0o600) -> None:
@@ -80,8 +107,9 @@ class Hub:
             "case_config",
         }:
             raise ProtocolError("hub config has invalid fields")
-        if config["schema"] != HUB_SCHEMA or config["case_config"] != DEFAULT_CASE_CONFIG:
+        if config["schema"] != HUB_SCHEMA:
             raise ProtocolError("hub config is unsupported")
+        _validate_case_config(config["case_config"])
         self.key = load_private_key(self.key_path)
         if public_key_text(self.key) != config["registry_key"]:
             raise ProtocolError("hub registry key does not match its config")

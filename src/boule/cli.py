@@ -1667,9 +1667,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="frozen evidence disclosure mode",
     )
     init.add_argument("--lease-seconds", type=int, default=3600)
-    init.add_argument("--absolute-lease-seconds", type=int, default=14400)
+    init.add_argument("--absolute-lease-seconds", type=int, default=43200)
     init.add_argument("--stale-seconds", type=int, default=900)
-    init.add_argument("--max-renewals", type=int, default=3)
+    init.add_argument("--max-renewals", type=int, default=11)
     init.add_argument("--json", action="store_true", help="emit compact JSON")
     init.set_defaults(handler=_init_problem)
 

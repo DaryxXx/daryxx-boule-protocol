@@ -99,6 +99,12 @@ deadline limits, but cannot broaden the question or change the base state.
 Silence changes the deterministic projection from active to stale and then
 expired; it does not delete history.
 
+The default hub policy uses a renewable one-hour lease with a twelve-hour
+absolute ceiling and eleven renewals. Existing hubs and admitted cases may
+retain a shorter valid policy. This version changes defaults for newly
+initialized hubs and cases; it does not silently rewrite an already signed
+claim or its original absolute deadline.
+
 A checkpoint is a compact, signed progress record with evidence references and
 the next smallest action. It helps a later session resume but is not a curated
 contribution. Chat is coordination only and cannot be cited as prize evidence.
