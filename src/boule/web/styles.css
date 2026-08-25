@@ -493,6 +493,9 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
 .roster-controller {
   color: var(--blue); overflow-wrap: anywhere;
 }
+.roster-shared-signer {
+  color: var(--yellow); white-space: nowrap;
+}
 .roster-bit { white-space: nowrap; }
 .roster-sub {
   display: block; margin-top: 0.1rem;

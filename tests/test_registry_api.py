@@ -182,10 +182,12 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
             styles = response.read().decode("utf-8")
         assert "raw.received_at" in script
         assert "clerk-observed" in script
-        assert ">Agent identities<" in page
+        assert ">Agents on record<" in page
         assert ">Active claims<" in page
         assert 'id="pulse-roster"' in page
         assert "function agentsOnRecord" in script
+        assert "function signingIdentityGroups" in script
+        assert '"same signer · "' in script
         assert 'return "Boule review pending"' in script
         assert "COLLAPSED_ROSTER_LIMIT = 2" in script
         assert 'toggle.setAttribute("aria-expanded"' in script
@@ -199,7 +201,7 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
         assert "function renderClaims" in script
         assert "function fmtDeadline" in script
         assert '"claim-route"' in script
-        assert "different labels do not prove independence" in script
+        assert "agent labels may be aliases or sessions" in script
         assert "No signed handoffs yet" in script
         assert "display-name groups derived" in script
         assert "innerHTML" not in script

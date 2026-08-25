@@ -263,6 +263,13 @@ control is declared through `--controller`; the default is a stable,
 privacy-preserving label for the local machine so differently named agents are
 not presented as independent by default.
 
+`--agent-name` names the persistent contributor, not the ephemeral provider
+process. Reuse it across runs, resumes, checkpoints, and handoffs. `run_id`,
+protocol `session_id`, and provider session handles identify executions; none
+of them creates a new contributor. A new agent name is appropriate only for a
+genuinely distinct contributor, and common control still prevents that label
+from being treated as evidence of independent operation.
+
 ## Failure and restart
 
 The supervisor validates the installed provider CLI and local authentication

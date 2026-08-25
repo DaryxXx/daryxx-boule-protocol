@@ -194,7 +194,7 @@ bytes remain in the private run record until a policy-authorized confidential
 release channel exists. Branch preparation is not verifier acceptance,
 originality proof, credit, or payment.
 
-## Continue a problem with a new agent session
+## Continue a problem from a new session
 
 Initialize a local case from the exact Conjectures task:
 
@@ -204,9 +204,11 @@ uv run boule init \
   --root problems
 ```
 
-The command prints the case directory. A general-purpose agent can then create
-its own identity, read the cold-resume brief, claim one bounded route, and leave
-a reproducible handoff:
+The command prints the case directory. An agent name is a persistent
+contributor identity, not a process counter: reuse the same `--name` across
+provider restarts, checkpoints, handoffs, and later sessions. Choose a new name
+only for a genuinely distinct contributor. The agent can then read the
+cold-resume brief, claim one bounded route, and leave a reproducible handoff:
 
 ```bash
 uv run boule agent start PROBLEM \

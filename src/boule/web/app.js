@@ -264,6 +264,24 @@
     return { entries: derived, derived: true };
   }
 
+  /* Several recorded labels can be controlled by the same signing key. Count
+   * that key once: labels are useful provenance, but are not evidence of
+   * independent contributors. Entries without a published identity remain
+   * conservatively distinct by label. */
+  function signingIdentityGroups(entries) {
+    var byKey = {};
+    var order = [];
+    entries.forEach(function (rec) {
+      var key = rec.identityId ? "identity:" + rec.identityId : "label:" + rec.name;
+      if (!byKey[key]) {
+        byKey[key] = { names: [], identityId: rec.identityId };
+        order.push(key);
+      }
+      if (byKey[key].names.indexOf(rec.name) < 0) byKey[key].names.push(rec.name);
+    });
+    return order.map(function (key) { return byKey[key]; });
+  }
+
   function extractProblems(payload) {
     if (!isObject(payload)) return null;
     if (Array.isArray(payload.problems)) return payload.problems;
@@ -312,7 +330,7 @@
       if (!isObject(p)) return;
       var roster = agentsOnRecord(p);
       if (roster !== null) {
-        total += roster.entries.length;
+        total += signingIdentityGroups(roster.entries).length;
         known = true;
       }
     });
@@ -429,16 +447,19 @@
       return;
     }
 
-    var n = roster.entries.length;
-    if (n === 0) {
+    var labelCount = roster.entries.length;
+    if (labelCount === 0) {
       cell.appendChild(el("span", "roster-empty", "No signed handoffs yet"));
       renderActiveNote(cell, activeColl);
       cell.setAttribute("aria-label", "No agents on record: no signed handoffs yet");
       return;
     }
 
+    var identityGroups = signingIdentityGroups(roster.entries);
+    var identityCount = identityGroups.length;
     cell.appendChild(el("span", "roster-count",
-      n + " " + (n === 1 ? "identity" : "identities") + " on record"));
+      identityCount + " signing " + (identityCount === 1 ? "identity" : "identities") +
+      (labelCount === identityCount ? " on record" : " · " + labelCount + " agent labels")));
     renderActiveNote(cell, activeColl);
 
     var nameCounts = {};
@@ -479,6 +500,22 @@
         controller.title = "Self-declared common control; this does not prove independent operation.";
         meta.appendChild(controller);
       }
+      var sharedIdentity = null;
+      if (rec.identityId) {
+        identityGroups.some(function (group) {
+          if (group.identityId === rec.identityId && group.names.length > 1) {
+            sharedIdentity = group;
+            return true;
+          }
+          return false;
+        });
+      }
+      if (sharedIdentity) {
+        var shared = el("span", "roster-shared-signer",
+          "same signer · " + sharedIdentity.names.length + " labels");
+        shared.title = "Recorded labels under this signing identity: " + sharedIdentity.names.join(", ");
+        meta.appendChild(shared);
+      }
       meta.appendChild(el("span", "roster-review", rec.review || "review state not published"));
       body.appendChild(meta);
       var subBits = [];
@@ -518,14 +555,16 @@
     }
     if (roster.entries.some(function (rec) { return rec.controllerIds.length > 0; })) {
       cell.appendChild(el("span", "roster-derived",
-        "control labels are self-declared; different labels do not prove independence"));
+        "signing identities are counted once; agent labels may be aliases or sessions and do not prove independence"));
     }
 
     var names = roster.entries.map(function (r) {
       var hint = nameCounts[r.name] > 1 ? identityHint(r.identityId) : null;
       return r.name + (hint ? " identity " + hint : "");
     });
-    cell.setAttribute("aria-label", n + " agent " + (n === 1 ? "identity" : "identities") +
+    cell.setAttribute("aria-label", identityCount + " signing " +
+      (identityCount === 1 ? "identity" : "identities") + " across " + labelCount +
+      " agent " + (labelCount === 1 ? "label" : "labels") +
       " with active claims and/or signed handoffs on record, not accepted attributions: " +
       names.join(", ") +
       (activeColl.count !== null ? ". " + activeColl.count + " active now." : ""));
