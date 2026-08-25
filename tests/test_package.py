@@ -6,7 +6,7 @@ from boule.version import USER_AGENT
 
 
 def test_public_version_matches_distribution_metadata() -> None:
-    assert __version__ == version("daryxx-boule-protocol")
+    assert __version__ == version("boule-protocol")
     assert USER_AGENT == f"Boule/{__version__}"
 
 

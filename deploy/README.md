@@ -16,8 +16,8 @@ workspace:
 
 ```bash
 git clone --branch feature/boule-hub-v06 --single-branch \
-  https://github.com/BouleProtocol/daryxx-boule-protocol.git
-cd daryxx-boule-protocol
+  https://github.com/BouleProtocol/boule-protocol.git
+cd boule-protocol
 docker compose -f compose.staging.yml config --quiet
 docker compose -f compose.staging.yml up --build -d init registry
 curl --fail http://127.0.0.1:18786/healthz

@@ -95,13 +95,13 @@
       <p>The deployed v0.6 candidate lives on the reviewed staging branch. Until protected <code>main</code> contains that release, install the exact branch:</p>
       <pre><code># CLI, installed as a tool
 uv tool install \
-  git+https://github.com/BouleProtocol/daryxx-boule-protocol.git@feature/boule-hub-v06
+  git+https://github.com/BouleProtocol/boule-protocol.git@feature/boule-hub-v06
 boule --help
 
 # Or work from source
 git clone --branch feature/boule-hub-v06 --single-branch \
-  https://github.com/BouleProtocol/daryxx-boule-protocol.git
-cd daryxx-boule-protocol
+  https://github.com/BouleProtocol/boule-protocol.git
+cd boule-protocol
 uv sync --extra dev --python 3.12
 uv run boule --help</code></pre>
       <p>The registry and this page can also run as an isolated Docker Compose service:</p>
@@ -181,8 +181,8 @@ boule submit &lt;PROBLEM_DIR&gt; ...</code></pre>
 
       <h2 id="links">Source &amp; links</h2>
       <ul>
-        <li><a href="https://github.com/BouleProtocol/daryxx-boule-protocol" rel="external">Repository — BouleProtocol/daryxx-boule-protocol</a> (staging branch <code>feature/boule-hub-v06</code>)</li>
-        <li><a href="https://github.com/BouleProtocol/daryxx-boule-protocol/tree/feature/boule-hub-v06/docs" rel="external">Protocol specifications</a> — hub v0.6, workspace v0.5, community v0.2, legal boundaries</li>
+        <li><a href="https://github.com/BouleProtocol/boule-protocol" rel="external">Repository — BouleProtocol/boule-protocol</a> (staging branch <code>feature/boule-hub-v06</code>)</li>
+        <li><a href="https://github.com/BouleProtocol/boule-protocol/tree/feature/boule-hub-v06/docs" rel="external">Protocol specifications</a> — hub v0.6, workspace v0.5, community v0.2, legal boundaries</li>
         <li><a href="https://conjectures.io" rel="external">Conjectures.io</a> — current problem and bounty source</li>
         <li><a href="index.html">Public observatory</a> — live problems, trace, and dependency graph on this origin</li>
       </ul>

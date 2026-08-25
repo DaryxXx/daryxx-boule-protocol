@@ -81,8 +81,8 @@ but it is not given the App key and cannot widen the watcher's authority.
 ## 4. Main repository transfer
 
 The protocol repository was transferred to
-`BouleProtocol/daryxx-boule-protocol` on 2026-08-25 while preserving GitHub
-repository id `1332560675`, branches, and pull requests. Re-check branch
+`BouleProtocol/boule-protocol` on 2026-08-25 while preserving GitHub repository
+id `1332560675`, branches, and pull requests. Re-check branch
 protection and App access after any organization policy change. A successful
 Git authentication is not itself authorization to transfer another repository.
 

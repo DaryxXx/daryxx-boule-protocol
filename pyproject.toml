@@ -3,7 +3,7 @@ requires = ["setuptools==80.9.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "daryxx-boule-protocol"
+name = "boule-protocol"
 version = "0.6.0"
 description = "Open-source protocol for durable, auditable research across people and AI agents."
 readme = "README.md"
@@ -24,9 +24,9 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/BouleProtocol/daryxx-boule-protocol/tree/feature/boule-hub-v06/docs"
-Issues = "https://github.com/BouleProtocol/daryxx-boule-protocol/issues"
-Repository = "https://github.com/BouleProtocol/daryxx-boule-protocol"
+Documentation = "https://github.com/BouleProtocol/boule-protocol/tree/feature/boule-hub-v06/docs"
+Issues = "https://github.com/BouleProtocol/boule-protocol/issues"
+Repository = "https://github.com/BouleProtocol/boule-protocol"
 
 [project.optional-dependencies]
 dev = [

@@ -60,8 +60,8 @@ Until v0.6 is reviewed into `main`, clone the exact candidate branch:
 
 ```bash
 git clone --branch feature/boule-hub-v06 --single-branch \
-  https://github.com/BouleProtocol/daryxx-boule-protocol.git
-cd daryxx-boule-protocol
+  https://github.com/BouleProtocol/boule-protocol.git
+cd boule-protocol
 uv sync --frozen --extra dev --python 3.12
 uv run boule --help
 ```
