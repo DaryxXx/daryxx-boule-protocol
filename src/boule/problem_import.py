@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from .errors import ProtocolError
+from .version import USER_AGENT
 
 SCHEMA = "boule-problem/0.1"
 SNAPSHOT_SCHEMA = "boule-problem-snapshot/0.1"
@@ -285,7 +286,7 @@ def parse_problem_html(
 
 
 def fetch_problem(url: str, timeout: float = 15.0) -> FetchResponse:
-    request = Request(url, headers={"User-Agent": "Boule/0.3 problem importer"})
+    request = Request(url, headers={"User-Agent": f"{USER_AGENT} problem-importer"})
     try:
         with urlopen(request, timeout=timeout) as response:
             body = response.read(MAX_PAGE_BYTES + 1)

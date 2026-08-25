@@ -59,3 +59,24 @@ ownership, return `INCONCLUSIVE` or recommend joint credit.
 Do not push protected `main`, rewrite shared history, or merge your own
 case-scoped work. Keep contribution discussion focused on the pinned task,
 reproducible evidence, and the applicable case terms.
+
+## Development checks
+
+Use the committed lockfile and run the same checks as CI before requesting
+review:
+
+```bash
+uv sync --frozen --extra dev --python 3.12
+uv lock --check
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+git ls-files -z | xargs -0 uv run --frozen detect-secrets-hook \
+  --no-verify --baseline .secrets.baseline
+uv run --frozen pytest
+uv build
+```
+
+Generated environments, caches, builds, local ledgers, model output, and private
+case state do not belong in Git. The secret-scan baseline contains reviewed
+hashes and synthetic fixtures; never update it merely to silence an unexplained
+finding.

@@ -43,6 +43,7 @@ from .remote_client import RemoteClient
 from .repository_migration import inspect_github_repository
 from .session_store import SessionStore, load_maintainer_key, maintainer_key_path
 from .trust_store import read_registry_trust, trust_registry_snapshot
+from .version import USER_AGENT
 from .workspace import Workspace
 
 
@@ -1264,7 +1265,7 @@ def _problems(args: argparse.Namespace) -> int:
     origin = _registry_origin(args.server)
     request = Request(
         origin + "/v1/problems",
-        headers={"Accept": "application/json", "User-Agent": "Boule/0.6"},
+        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
     )
     try:
         with urlopen(request, timeout=args.timeout) as response:
@@ -1304,7 +1305,7 @@ def _problems(args: argparse.Namespace) -> int:
                     target = min(current + MAX_CHAIN_PROOF_ENTRIES, snapshot["count"])
                     proof_request = Request(
                         f"{origin}/v1/chain/{current}/{target}",
-                        headers={"Accept": "application/json", "User-Agent": "Boule/0.6"},
+                        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
                     )
                     try:
                         with urlopen(proof_request, timeout=remaining) as response:

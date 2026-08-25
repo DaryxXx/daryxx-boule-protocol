@@ -1,5 +1,5 @@
 name: Propose a Boule case
-description: Propose a funded, evidence-bound collaborative bounty.
+description: Propose an evidence-bound collaborative bounty for maintainer review.
 title: "[case] "
 labels: ["case-proposal"]
 body:

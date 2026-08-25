@@ -39,9 +39,9 @@ not itself a contribution; only signed, evidence-linked artifacts are.
 - When evidence cannot distinguish causal ownership, return `INCONCLUSIVE` or
   joint credit. Do not manufacture precision.
 
-This v0.1 has a trusted clerk for reviewer admission and receipt time. Never
-describe it as trustless, fully permissionless, an escrow, or a deployed
-Bittensor subnet.
+The current hub/workspace and the retained v0.1 adjudication fixture use trusted
+clerks for ordering or admission. Never describe any version as trustless,
+fully permissionless, an escrow, or a deployed Bittensor subnet.
 
-`verify-ledger` accepts a valid partial transcript for inspection. Use
-`--require-decision` before consuming an allocation.
+The legacy `verify-ledger` command accepts a valid partial transcript for
+inspection. Use `--require-decision` before consuming an allocation.

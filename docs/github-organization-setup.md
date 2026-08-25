@@ -1,5 +1,9 @@
 # GitHub Organization and Provisioner Setup
 
+This is the operator companion to the
+[Boule Hub Protocol v0.6](hub-protocol-v0.6.md). Return to the
+[documentation index](README.md) for protocol status and reading order.
+
 This is the one-time owner setup for real GitHub provisioning. Boule can run
 locally without it; the staging `local` provider exists for deterministic
 tests.

@@ -428,10 +428,7 @@ class Hub:
             raise ProtocolError("case clerk did not return a verified snapshot")
         evidence_name = evidence.ref_manifest_sha256.removeprefix("sha256:")
         _write_json(
-            self.control
-            / "private"
-            / "repository-migrations"
-            / f"{case_id}-{evidence_name}.json",
+            self.control / "private" / "repository-migrations" / f"{case_id}-{evidence_name}.json",
             {
                 "schema": "boule-repository-migration-evidence/0.1",
                 "case_id": case_id,

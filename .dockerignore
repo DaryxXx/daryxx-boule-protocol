@@ -1,16 +1,19 @@
+# Version control, environments, and caches
 .git
 .venv
 .ruff_cache
 .pytest_cache
 __pycache__
-*.pyc
+*.py[cod]
+.coverage
+htmlcov
+
+# Credentials and private runtime state
 .env
 .env.*
 *.pem
 *.key
 .boule
-registry*.jsonl
-intake*.jsonl
 *.jsonl
 intake
 repositories
@@ -18,8 +21,22 @@ remotes
 runtime
 data
 boule-data
+
+# Generated or local-only material
+artifacts
 build
 dist
 demo-output
 knowledge
 cases
+
+# Files not used by the runtime image
+.github
+AGENTS.md
+CONTRIBUTING.md
+compose.github.yml
+compose.staging.yml
+deploy
+docs
+examples
+tests

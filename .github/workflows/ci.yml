@@ -8,19 +8,84 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: 0.9.5
+
 jobs:
   test:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e '.[dev]'
-      - run: ruff check .
-      - run: pytest
+      - name: Install locked-environment tool
+        run: python -m pip install --disable-pip-version-check "uv==${UV_VERSION}"
+      - name: Validate and sync lockfile
+        run: |
+          uv lock --check
+          uv sync --frozen --extra dev --python "${{ matrix.python-version }}"
+      - name: Lint and format check
+        run: |
+          uv run --frozen ruff check .
+          uv run --frozen ruff format --check .
+      - name: Reject secrets outside the reviewed baseline
+        run: |
+          git ls-files -z | xargs -0 uv run --frozen detect-secrets-hook \
+            --no-verify --baseline .secrets.baseline
+      - name: Test
+        run: uv run --frozen pytest
+      - name: Build distributions
+        run: uv build
+      - name: Verify installed wheel and bundled UI
+        shell: bash
+        run: |
+          smoke_root="$(mktemp -d)"
+          wheel_path="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          sdist_path="$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          test -n "${wheel_path}"
+          test -n "${sdist_path}"
+          tar -tzf "${sdist_path}" >"${smoke_root}/sdist-files.txt"
+          grep -q '/docs/README.md$' "${smoke_root}/sdist-files.txt"
+          grep -q '/tests/fixtures/conjectures/erdos686-formalized.html$' \
+            "${smoke_root}/sdist-files.txt"
+          grep -q '/.secrets.baseline$' "${smoke_root}/sdist-files.txt"
+          uv venv --python "${{ matrix.python-version }}" "${smoke_root}/venv"
+          uv pip install --python "${smoke_root}/venv/bin/python" "${wheel_path}"
+          "${smoke_root}/venv/bin/boule" --help >/dev/null
+          "${smoke_root}/venv/bin/python" - <<'PY'
+          from importlib.resources import files
+
+          web = files("boule").joinpath("web")
+          required = ("index.html", "styles.css", "app.js", "favicon.svg", "docs.html", "llms.txt")
+          assert all(web.joinpath(name).is_file() for name in required)
+          PY
+
+  container:
+    name: Container image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build image from the frozen lockfile
+        run: docker build --tag boule-ci .
+      - name: Verify entry point and non-root runtime
+        run: |
+          docker run --rm boule-ci --help >/dev/null
+          test "$(docker run --rm --entrypoint id boule-ci -u)" = "10001"
+          docker run --rm --mount type=volume,destination=/data \
+            boule-ci registry init /data --json >/dev/null

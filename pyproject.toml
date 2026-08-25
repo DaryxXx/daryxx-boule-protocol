@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools==80.9.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -11,12 +11,26 @@ requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Daryxx", email = "xxyrad@proton.me" }]
+keywords = ["agents", "attribution", "bounties", "collaboration", "provenance"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
 dependencies = [
   "cryptography>=44,<48",
 ]
 
+[project.urls]
+Documentation = "https://github.com/BouleProtocol/daryxx-boule-protocol/tree/feature/boule-hub-v06/docs"
+Issues = "https://github.com/BouleProtocol/daryxx-boule-protocol/issues"
+Repository = "https://github.com/BouleProtocol/daryxx-boule-protocol"
+
 [project.optional-dependencies]
 dev = [
+  "detect-secrets>=1.5,<2",
   "pytest>=8.3,<10",
   "ruff>=0.9,<1",
 ]

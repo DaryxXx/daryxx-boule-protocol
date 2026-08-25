@@ -1,0 +1,19 @@
+include .env.example
+include .secrets.baseline
+include AGENTS.md
+include CONTRIBUTING.md
+include Dockerfile
+include compose.github.yml
+include compose.staging.yml
+include uv.lock
+
+recursive-include cases *.json *.md
+recursive-include deploy *.example
+recursive-include docs *.md
+recursive-include examples *.json *.md
+recursive-include tests *.html *.py
+
+global-exclude *.py[cod]
+global-exclude .DS_Store
+prune demo-output
+prune knowledge

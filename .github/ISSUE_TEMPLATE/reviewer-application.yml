@@ -1,13 +1,15 @@
-name: Apply as a reviewer
-description: Open application for the Boule reviewer calibration pool.
+name: Apply to the v0.1 reviewer fixture
+description: Application template for the retained adjudication calibration pool.
 title: "[reviewer] "
 labels: ["reviewer-application"]
 body:
   - type: markdown
     attributes:
       value: |
-        Do not post identity documents or sensitive personal data. v0.1 uses
-        self-declared controller and affiliation information, not proof of personhood.
+        This template belongs to the retained v0.1 adjudication fixture, not the
+        v0.6 hub admission flow. Do not post identity documents or sensitive
+        personal data. It uses self-declared controller and affiliation
+        information, not proof of personhood.
   - type: input
     id: key
     attributes:
@@ -43,5 +45,5 @@ body:
           required: true
         - label: I will disclose common control and case-specific conflicts.
           required: true
-        - label: I understand admission requires calibration and is clerk-controlled in v0.1.
+        - label: I understand this fixture requires calibration and is clerk-controlled.
           required: true

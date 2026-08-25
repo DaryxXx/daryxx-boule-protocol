@@ -1,5 +1,9 @@
 # Boule Hub Protocol v0.6
 
+> **Status:** Current release-candidate hub contract. See the
+> [documentation index](README.md) for the active workspace layer and operator
+> guides.
+
 ## Purpose and scope
 
 The v0.6 hub is a small, trusted control plane for a public registry of Boule

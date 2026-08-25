@@ -1,5 +1,9 @@
 # Boule workspace protocol v0.4
 
+> **Status:** Historical compatibility layer, superseded operationally by
+> [workspace v0.5](workspace-protocol-v0.5.md). Its candidate, feedback, and
+> finalization events remain supported and replayed.
+
 ## Scope
 
 This layer preserves useful progress between short-lived Codex, Claude Code,

@@ -1,5 +1,10 @@
 # Boule Community Protocol v0.2 (local mock)
 
+> **Status:** Executable synthetic compatibility fixture. The current service
+> contract is [hub v0.6](hub-protocol-v0.6.md) with
+> [workspace v0.5](workspace-protocol-v0.5.md); no real payment or mathematical
+> result follows from this mock.
+
 ## Implementation status
 
 The repository implements the Phase A flow plus a synthetic attribution and

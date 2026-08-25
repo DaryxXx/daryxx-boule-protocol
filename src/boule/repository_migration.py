@@ -262,9 +262,10 @@ def verify_local_to_github_mirror(
             raise ProtocolError("source and destination Git refs are not identical")
         destination_commit = _main_commit(target, destination_manifest)
         marker_commit = record.get("repository_commit")
-    if not isinstance(destination_commit, str) or OBJECT_ID_RE.fullmatch(
-        destination_commit
-    ) is None:
+    if (
+        not isinstance(destination_commit, str)
+        or OBJECT_ID_RE.fullmatch(destination_commit) is None
+    ):
         raise ProtocolError("destination repository commit is invalid")
     if not isinstance(marker_commit, str) or OBJECT_ID_RE.fullmatch(marker_commit) is None:
         raise ProtocolError("case marker commit is invalid")
@@ -365,9 +366,7 @@ def inspect_github_repository(
     repository_name = _github_name(repository_name, "repository name")
     expected_account = _github_name(expected_account, "account")
     try:
-        actor = strict_json_bytes(
-            _run(["gh", "api", "--hostname", "github.com", "user"])
-        )
+        actor = strict_json_bytes(_run(["gh", "api", "--hostname", "github.com", "user"]))
     except ProtocolError as exc:
         raise ProtocolError("GitHub account lookup failed") from exc
     if not isinstance(actor, dict) or actor.get("login") != expected_account:

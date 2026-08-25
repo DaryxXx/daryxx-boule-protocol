@@ -605,9 +605,10 @@ class Registry:
                 )
                 from_repo_url = _public_url(payload["from_repo_url"], "from_repo_url")
                 from_commit = payload["from_repository_commit"]
-                if not isinstance(from_commit, str) or re.fullmatch(
-                    r"[0-9a-f]{40,64}", from_commit
-                ) is None:
+                if (
+                    not isinstance(from_commit, str)
+                    or re.fullmatch(r"[0-9a-f]{40,64}", from_commit) is None
+                ):
                     raise ProtocolError("repository migration source commit is invalid")
                 if (
                     from_repository_id != record.repository_id
@@ -629,9 +630,10 @@ class Registry:
                     raise ProtocolError("repository migration destination is not GitHub")
                 to_repo_url = _public_url(payload["to_repo_url"], "to_repo_url")
                 to_commit = payload["to_repository_commit"]
-                if not isinstance(to_commit, str) or re.fullmatch(
-                    r"[0-9a-f]{40,64}", to_commit
-                ) is None:
+                if (
+                    not isinstance(to_commit, str)
+                    or re.fullmatch(r"[0-9a-f]{40,64}", to_commit) is None
+                ):
                     raise ProtocolError("repository migration destination commit is invalid")
                 marker_blob = payload["marker_blob_sha256"]
                 if not isinstance(marker_blob, str) or SHA256_RE.fullmatch(marker_blob) is None:
@@ -902,13 +904,15 @@ class Registry:
         if not isinstance(repository_id, int) or repository_node_id is None:
             raise ProtocolError("repository migration destination is not GitHub")
         repo_url = _public_url(repo_url, "repo_url")
-        if not isinstance(repository_commit, str) or re.fullmatch(
-            r"[0-9a-f]{40,64}", repository_commit
-        ) is None:
+        if (
+            not isinstance(repository_commit, str)
+            or re.fullmatch(r"[0-9a-f]{40,64}", repository_commit) is None
+        ):
             raise ProtocolError("repository commit is invalid")
-        if not isinstance(marker_blob_sha256, str) or SHA256_RE.fullmatch(
-            marker_blob_sha256
-        ) is None:
+        if (
+            not isinstance(marker_blob_sha256, str)
+            or SHA256_RE.fullmatch(marker_blob_sha256) is None
+        ):
             raise ProtocolError("repository marker blob digest is invalid")
         ref_manifest = validate_ref_manifest(ref_manifest)
         expected_manifest_digest = "sha256:" + digest_object(ref_manifest)
@@ -919,9 +923,7 @@ class Registry:
         ):
             raise ProtocolError("repository ref manifest digest is invalid")
         main_commit = next(
-            item["object_id"]
-            for item in ref_manifest["refs"]
-            if item["name"] == "refs/heads/main"
+            item["object_id"] for item in ref_manifest["refs"] if item["name"] == "refs/heads/main"
         )
         if repository_commit != main_commit:
             raise ProtocolError("repository commit is not the ref manifest main")

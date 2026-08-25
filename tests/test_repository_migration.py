@@ -106,9 +106,7 @@ def test_lookup_only_github_inspector_derives_identity_and_clones(
         assert inspection.repository.local_path.is_dir()
         inspection.revalidate()
     assert not any(command[:3] == ["gh", "api", "--method"] for command in observed)
-    assert (
-        sum(command[-1] == f"repos/BouleProtocol/{name}" for command in observed) == 2
-    )
+    assert sum(command[-1] == f"repos/BouleProtocol/{name}" for command in observed) == 2
 
 
 def test_github_inspector_rejects_wrong_boundary_without_cloning(monkeypatch) -> None:

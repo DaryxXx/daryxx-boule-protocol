@@ -302,9 +302,7 @@ def test_cli_migrates_verified_local_repository_and_preserves_original_marker_id
         ["git", "-C", str(advanced), "config", "user.email", "test@example.invalid"],
         check=True,
     )
-    subprocess.run(
-        ["git", "-C", str(advanced), "rm", MARKER_PATH], check=True, capture_output=True
-    )
+    subprocess.run(["git", "-C", str(advanced), "rm", MARKER_PATH], check=True, capture_output=True)
     subprocess.run(
         ["git", "-C", str(advanced), "commit", "-m", "advance main"],
         check=True,
@@ -398,9 +396,10 @@ def test_cli_migrates_verified_local_repository_and_preserves_original_marker_id
     assert private_evidence.stat().st_mode & 0o777 == 0o600
     evidence = json.loads(private_evidence.read_text(encoding="utf-8"))
     assert evidence["ref_manifest"]["schema"] == "boule-git-ref-manifest/0.1"
-    assert evidence["ref_manifest_sha256"] == result["case"]["repository_migrations"][0][
-        "ref_manifest_sha256"
-    ]
+    assert (
+        evidence["ref_manifest_sha256"]
+        == result["case"]["repository_migrations"][0]["ref_manifest_sha256"]
+    )
 
     migrated_count = Hub(hub.root).registry.count
     main_commit = str(result["case"]["repository_commit"])

@@ -1,5 +1,9 @@
 # Boule v0.1 protocol and threat model
 
+> **Status:** Retained core-adjudication fixture and compatibility reference.
+> The current service contract is [hub v0.6](hub-protocol-v0.6.md) with
+> [workspace v0.5](workspace-protocol-v0.5.md).
+
 ## Claim ceiling
 
 Given a frozen case, signed evidence, a verifier receipt, a roster snapshot,

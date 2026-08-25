@@ -1,5 +1,9 @@
 # Boule workspace protocol v0.5
 
+> **Status:** Current case-workspace contract. It runs below the
+> [v0.6 hub](hub-protocol-v0.6.md) and preserves replay compatibility with v0.3
+> and v0.4 events.
+
 ## Scope
 
 Version 0.5 adds a central append path for independent Git clones without

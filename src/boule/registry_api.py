@@ -27,6 +27,7 @@ from .remote_protocol import (
     verify_chain_proof,
     verify_snapshot,
 )
+from .version import USER_AGENT
 
 MAX_PATH_BYTES = 2_048
 MAX_CASE_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -125,7 +126,7 @@ def maintainer_runtime_status(
 
 
 def _fetch_json(endpoint: str, timeout: float, maximum: int) -> Any:
-    request = Request(endpoint, headers={"Accept": "application/json", "User-Agent": "Boule/0.6"})
+    request = Request(endpoint, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
     try:
         with urlopen(request, timeout=timeout) as response:
             body = response.read(maximum + 1)

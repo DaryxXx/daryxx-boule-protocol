@@ -1,5 +1,9 @@
 # Boule workspace protocol v0.3
 
+> **Status:** Historical compatibility layer, superseded operationally by
+> [workspace v0.5](workspace-protocol-v0.5.md). Existing v0.3 ledgers remain
+> replayable; this is not the current remote-clerk contract.
+
 ## Scope
 
 This layer preserves useful progress between short-lived Codex, Claude Code,
