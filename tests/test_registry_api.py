@@ -186,6 +186,7 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
         assert ">Active claims<" in page
         assert 'id="pulse-roster"' in page
         assert "function agentsOnRecord" in script
+        assert 'return "Boule review pending"' in script
         assert "COLLAPSED_ROSTER_LIMIT = 2" in script
         assert 'toggle.setAttribute("aria-expanded"' in script
         assert '"Show fewer"' in script

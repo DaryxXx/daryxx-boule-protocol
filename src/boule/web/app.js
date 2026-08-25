@@ -158,6 +158,7 @@
   function reviewLabel(v) {
     var s = asString(v);
     if (!s) return null;
+    if (s === "queued_for_review") return "Boule review pending";
     return s.replace(/_/g, " ");
   }
 
