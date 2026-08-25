@@ -2,13 +2,15 @@ include .env.example
 include .secrets.baseline
 include AGENTS.md
 include CONTRIBUTING.md
+include SECURITY.md
 include Dockerfile
 include compose.github.yml
+include compose.github-auto.yml
 include compose.staging.yml
 include uv.lock
 
 recursive-include cases *.json *.md
-recursive-include deploy *.example
+recursive-include deploy *.example *.md *.sh
 recursive-include docs *.md
 recursive-include examples *.json *.md
 recursive-include tests *.html *.py

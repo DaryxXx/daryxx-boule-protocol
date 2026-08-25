@@ -151,13 +151,14 @@ uv run boule registry provision ./boule-data CASE_ID \
   --github-org BOULE_ORG \
   --github-app-id APP_ID \
   --github-installation-id INSTALLATION_ID \
-  --github-key-file /run/secrets/boule-github-app.pem
+  --github-key-file /absolute/private/path/github-app.pem
 ```
 
 The App can create repositories and write their initial contents. It cannot
 sign as a contributor, submit to Conjectures, review a proof, allocate a prize,
-or move funds. See the [GitHub organization setup](docs/github-organization-setup.md)
-and [hub protocol](docs/hub-protocol-v0.6.md) before enabling automation.
+or move funds. See the [deployment handoff](deploy/README.md),
+[GitHub organization setup](docs/github-organization-setup.md), and
+[hub protocol](docs/hub-protocol-v0.6.md) before enabling automation.
 
 Run the read-only registry and landing locally:
 
@@ -172,6 +173,9 @@ be private and writable by `10001:10001` before the non-root service starts.
 
 The listener is deliberately loopback-bound. A TLS reverse-proxy example is in
 [`deploy/staging/nginx.conf.example`](deploy/staging/nginx.conf.example).
+The GitHub App PEM remains outside the checkout; `.env` contains only public
+identifiers and its host path. See [SECURITY.md](SECURITY.md) before sharing a
+source archive or runtime backup.
 
 ## Candidate and review boundary
 
@@ -207,6 +211,7 @@ docs/                       current specifications and labelled history
 examples/                   synthetic fixtures and schema templates
 cases/                      preserved public provenance pilots, never runtime data
 deploy/staging/             reverse-proxy example for the loopback service
+deploy/README.md            clean-host deployment and credential handoff
 .github/                    CI and contribution templates
 ```
 

@@ -39,23 +39,32 @@ Never commit the PEM or paste it into chat, an issue, Compose YAML, or `.env`.
 With the supplied container, make the file readable only by runtime UID `10001`
 (for example ownership `10001:10001` and mode `0600`).
 
-Record the non-secret organization, App ID, and installation ID in the runtime
-environment. Mount the private key read-only at the path named by
-`BOULE_GITHUB_APP_KEY_FILE`.
+Record the non-secret organization, App ID, installation ID, and external key
+path in the ignored `.env` used by Compose. The PEM contents never enter
+`.env`; Compose mounts that file read-only at the container path named by
+`BOULE_GITHUB_APP_KEY_FILE`. Follow the complete
+[deployment handoff](../deploy/README.md) and run its preflight before use.
 
 ## 3. Verify before enabling the watcher
 
-Run one explicit private provisioning first:
+Run one explicit private provisioning first. With the supplied deployment,
+use the credentialed CLI overlay documented in the
+[deployment handoff](../deploy/README.md); the equivalent direct CLI operation
+is:
 
 ```bash
-boule registry provision /data CASE_ID \
+boule registry provision /absolute/path/to/boule-data CASE_ID \
   --provider github-app \
   --github-org BouleProtocol \
   --github-app-id APP_ID \
   --github-installation-id INSTALLATION_ID \
-  --github-key-file /run/secrets/boule-github-app.pem \
+  --github-key-file /absolute/private/path/github-app.pem \
   --visibility private
 ```
+
+The paths above are host placeholders and must belong to the same execution
+environment. The Compose command in the deployment handoff supplies the
+container paths correctly.
 
 Require the returned repository to match the requested owner, deterministic
 name, private visibility, and `main` default branch. Boule then verifies every
@@ -64,9 +73,10 @@ GitHub repository id/node id bound by its signed case marker. A same-name
 replacement is rejected during provisioning; a pre-existing empty repository
 is rejected rather than silently claimed.
 
-Only after this succeeds should the deterministic watcher receive
-`--auto-provision`. A language model may advise on operational state, but it is
-not given the App key and cannot widen the watcher's authority.
+Only after this succeeds should the explicit `compose.github-auto.yml` overlay
+give the deterministic watcher `--auto-admit` and `--auto-provision`. The normal
+GitHub overlay is passive. A language model may advise on operational state,
+but it is not given the App key and cannot widen the watcher's authority.
 
 ## 4. Main repository transfer
 

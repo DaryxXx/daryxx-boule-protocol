@@ -13,6 +13,10 @@ htmlcov
 .env.*
 *.pem
 *.key
+*.p12
+*.pfx
+*.jks
+*.keystore
 .boule
 *.jsonl
 intake
@@ -35,6 +39,7 @@ cases
 AGENTS.md
 CONTRIBUTING.md
 compose.github.yml
+compose.github-auto.yml
 compose.staging.yml
 deploy
 docs

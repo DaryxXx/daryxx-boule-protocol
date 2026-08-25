@@ -79,4 +79,5 @@ uv build
 Generated environments, caches, builds, local ledgers, model output, and private
 case state do not belong in Git. The secret-scan baseline contains reviewed
 hashes and synthetic fixtures; never update it merely to silence an unexplained
-finding.
+finding. Follow [SECURITY.md](SECURITY.md) for credential handling and share a
+clean clone or `git archive`, never an operator's full working directory.

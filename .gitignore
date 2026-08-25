@@ -18,11 +18,16 @@ dist/
 !.env.example
 *.key
 *.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
 .boule/
 /boule-data/
 /problems/
 /registry*.jsonl
 /intake*.jsonl
+/secrets/
 
 # Local evidence, generated output, and private project notes
 /artifacts/

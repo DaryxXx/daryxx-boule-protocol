@@ -7,7 +7,9 @@ MARKDOWN_ROOTS = (
     ROOT / "README.md",
     ROOT / "CONTRIBUTING.md",
     ROOT / "AGENTS.md",
+    ROOT / "SECURITY.md",
     ROOT / "docs",
+    ROOT / "deploy",
     ROOT / "examples",
     ROOT / "cases",
 )
