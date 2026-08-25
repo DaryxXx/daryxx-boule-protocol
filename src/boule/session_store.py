@@ -81,6 +81,8 @@ class SessionStore:
         label: str | None,
         not_after: str,
         appender: Callable[[str, dict[str, Any], Any], Any] | None = None,
+        controller_key: Any | None = None,
+        persist_controller_key: bool = True,
     ) -> dict[str, Any]:
         participant_id = _identifier(participant_id, "participant")
         controller_id = _identifier(controller_id, "controller")
@@ -88,15 +90,26 @@ class SessionStore:
             raise ProtocolError("label must be non-empty text up to 120 characters")
         controller_path = self._controller_path(controller_id)
         if controller_path.exists():
-            controller_key = load_private_key(controller_path)
+            stored_controller_key = load_private_key(controller_path)
+            if controller_key is not None and public_key_text(
+                stored_controller_key
+            ) != public_key_text(controller_key):
+                raise ProtocolError("delegated controller key differs from the local controller")
+            controller_key = stored_controller_key
         else:
-            controller_key = generate_private_key()
-            try:
-                write_private_key(controller_path, controller_key)
-            except ProtocolError:
-                if not controller_path.exists():
-                    raise
-                controller_key = load_private_key(controller_path)
+            controller_key = controller_key or generate_private_key()
+            if persist_controller_key:
+                try:
+                    write_private_key(controller_path, controller_key)
+                except ProtocolError:
+                    if not controller_path.exists():
+                        raise
+                    stored_controller_key = load_private_key(controller_path)
+                    if public_key_text(stored_controller_key) != public_key_text(controller_key):
+                        raise ProtocolError(
+                            "delegated controller key differs from the concurrent local controller"
+                        ) from None
+                    controller_key = stored_controller_key
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
         session_id = f"s-{stamp}-{secrets.token_hex(5)}"
         session_key = generate_private_key()

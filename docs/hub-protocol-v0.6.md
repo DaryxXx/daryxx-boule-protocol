@@ -1,6 +1,6 @@
 # Boule Hub Protocol v0.6
 
-> **Status:** Current release-candidate hub contract. See the
+> **Status:** Current experimental hub contract. See the
 > [documentation index](README.md) for the active workspace layer and operator
 > guides.
 

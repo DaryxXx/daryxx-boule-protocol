@@ -96,3 +96,42 @@ def test_external_append_interruption_preserves_session_material_for_recovery(tm
 
     assert len(list(store.sessions.glob("*.pem"))) == 1
     assert len(list(store.profiles.glob("*.json"))) == 1
+
+
+def test_delegated_controller_key_can_remain_outside_the_case_checkout(tmp_path):
+    work = workspace(tmp_path)
+    store = SessionStore(work)
+    controller_key = generate_private_key()
+    profile = store.start(
+        participant_id="agent-a",
+        controller_id="shared-controller",
+        label="supervised",
+        not_after="2030-01-02T00:00:00Z",
+        appender=lambda *_args: None,
+        controller_key=controller_key,
+        persist_controller_key=False,
+    )
+
+    assert profile["controller_key"] == public_key_text(controller_key)
+    assert not list(store.controllers.glob("*.pem"))
+
+
+def test_delegated_controller_must_match_an_existing_local_controller(tmp_path):
+    work = workspace(tmp_path)
+    store = SessionStore(work)
+    store.start(
+        participant_id="agent-a",
+        controller_id="owner",
+        label=None,
+        not_after="2030-01-02T00:00:00Z",
+    )
+
+    with pytest.raises(ProtocolError, match="differs from the local controller"):
+        store.start(
+            participant_id="agent-b",
+            controller_id="owner",
+            label=None,
+            not_after="2030-01-02T00:00:00Z",
+            controller_key=generate_private_key(),
+            persist_controller_key=False,
+        )

@@ -21,10 +21,11 @@ classifiers = [
 ]
 dependencies = [
   "cryptography>=44,<48",
+  "rich>=14,<15",
 ]
 
 [project.urls]
-Documentation = "https://github.com/BouleProtocol/boule-protocol/tree/feature/boule-hub-v06/docs"
+Documentation = "https://github.com/BouleProtocol/boule-protocol/tree/main/docs"
 Issues = "https://github.com/BouleProtocol/boule-protocol/issues"
 Repository = "https://github.com/BouleProtocol/boule-protocol"
 

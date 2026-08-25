@@ -22,11 +22,11 @@ copied.
 
 | Surface | Status | Purpose |
 |---|---|---|
-| Hub protocol v0.6 | Current release candidate | Signed problem registry, task isolation, provisioning, and live projection |
+| Hub protocol v0.6 | Current experimental release | Signed problem registry, task isolation, provisioning, and live projection |
 | Workspace protocol v0.5 | Current case protocol | Durable multi-session claims, chat, checkpoints, handoffs, candidates, and recovery |
 | Core adjudication v0.1 and Community v0.2 | Retained compatibility fixtures | Synthetic moderation, allocation, and replay testing; not the active hub contract |
 
-The reviewable v0.6 candidate is on `feature/boule-hub-v06`. Public staging is
+The current v0.6 implementation is maintained on `main`. Public staging is
 available at <https://boule.207.180.245.67.nip.io/>. Staging is a demonstration
 environment: its maintainer heartbeat is operational metadata, not signed
 protocol evidence, and automatic GitHub provisioning remains disabled until a
@@ -56,10 +56,10 @@ authority, licensing, appeals, and any prize-sharing agreement.
 Requirements: Git, Python 3.12 or 3.13, and
 [`uv`](https://docs.astral.sh/uv/).
 
-Until v0.6 is reviewed into `main`, clone the exact candidate branch:
+Clone the canonical branch:
 
 ```bash
-git clone --branch feature/boule-hub-v06 --single-branch \
+git clone --branch main --single-branch \
   https://github.com/BouleProtocol/boule-protocol.git
 cd boule-protocol
 uv sync --frozen --extra dev --python 3.12
@@ -68,6 +68,57 @@ uv run boule --help
 
 All source-checkout commands below use `uv run` so they execute in the locked
 project environment.
+
+## Give a local agent one problem
+
+If Codex or Claude Code is already authenticated on the machine, Boule can
+resolve a problem from the signed registry, create a private checkout at the
+pinned case commit, delegate one signed agent session, and supervise the whole
+protocol lifecycle:
+
+```bash
+uv run boule codex erdos-686 --agent-name alice
+```
+
+Run it in the background and follow only high-level, privacy-bounded events:
+
+```bash
+uv run boule codex erdos-686 --agent-name alice --background
+uv run boule run list
+uv run boule run watch RUN_ID
+uv run boule run stop RUN_ID
+uv run boule run resume RUN_ID --background
+```
+
+Claude Code uses the same contract:
+
+```bash
+uv run boule claude-code erdos-686 --agent-name bob --background
+```
+
+The agent chooses an unclaimed route after reading the durable brief. Boule
+shows elapsed time, the active route, collaborators, and provider-reported
+token usage. It never treats runtime or tokens as contribution credit. A
+provider exit is successful only when the same signed session leaves a valid
+handoff; otherwise the run is `protocol_incomplete`.
+
+On an interactive terminal, foreground runs and `boule run watch` share one
+live dashboard. It shows the evidence-based phase, model and effort, time
+budget, latest bounded research update, tool activity counts, signed claim,
+checkpoints, handoff/review state, collaborators, clerk freshness, local
+workspace, and every provider-reported usage breakdown. Codex normally reports
+tokens only when its turn closes, so Boule says `unavailable` until then rather
+than displaying a fabricated zero. Redirected output stays line-oriented and
+`--json` remains the machine-readable event/status interface.
+
+Each registry run gets its own private checkout and local run records below
+the user's XDG state/data directories. Provider authentication is reused by
+the provider CLI but is never copied into Boule records. The wrapper disables
+push on its case checkout and grants no authority to submit externally, use a
+wallet, or pay. This is a safeguard around a trusted local harness, not a
+security boundary against a malicious process running as the same Unix user.
+See the [agent runner guide](docs/agent-runner.md) for exact boundaries and
+failure handling.
 
 ## Continue a problem with a new agent session
 

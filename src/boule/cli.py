@@ -13,10 +13,15 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
 
+from .agent_runner import (
+    launch_background,
+    prepare_resume,
+    prepare_run,
+    reconcile_run,
+    run_worker,
+    stop_run,
+)
 from .canonical import canonical_bytes
 from .case_scaffold import write_case_support_files
 from .clerk_api import build_server as build_clerk_server
@@ -36,14 +41,15 @@ from .maintainer_advisor import ALLOWED_MODELS, advise
 from .policy import DISCLOSURE_MODES, build_case_policy
 from .problem_import import import_problem
 from .protocol import replay_ledger
+from .provider_runtime import PROVIDER_EFFORTS
 from .provisioner import CaseProvisioner, GitHubAppRepositoryProvider, LocalRepositoryProvider
-from .registry import MAX_CHAIN_PROOF_ENTRIES, verify_registry_snapshot
 from .registry_api import build_server as build_registry_server
+from .registry_client import fetch_registry_index
 from .remote_client import RemoteClient
 from .repository_migration import inspect_github_repository
+from .run_store import TERMINAL_STATES, RunStore
 from .session_store import SessionStore, load_maintainer_key, maintainer_key_path
-from .trust_store import read_registry_trust, trust_registry_snapshot
-from .version import USER_AGENT
+from .terminal_ui import RunTerminal, print_run_dashboard, print_run_list
 from .workspace import Workspace
 
 
@@ -1242,120 +1248,143 @@ def _registry_serve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _registry_origin(value: str) -> str:
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ProtocolError("registry server must be an HTTP(S) origin without credentials")
-    if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
-        raise ProtocolError("remote registry HTTP is allowed only on loopback; use HTTPS remotely")
-    return value.rstrip("/")
-
-
 def _problems(args: argparse.Namespace) -> int:
-    if args.timeout <= 0:
-        raise ProtocolError("registry request timeout must be positive")
-    origin = _registry_origin(args.server)
-    request = Request(
-        origin + "/v1/problems",
-        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+    result = fetch_registry_index(
+        args.server,
+        clerk_key=args.clerk_key,
+        trust_store=args.trust_store,
+        timeout=args.timeout,
     )
-    try:
-        with urlopen(request, timeout=args.timeout) as response:
-            raw = response.read(4 * 1024 * 1024 + 1)
-            if (
-                response.status != 200
-                or len(raw) > 4 * 1024 * 1024
-                or response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-                != "application/json"
-            ):
-                raise ProtocolError("registry returned an invalid response")
-            if response.geturl() != origin + "/v1/problems":
-                raise ProtocolError("registry response redirected")
-    except (HTTPError, URLError, TimeoutError) as exc:
-        raise ProtocolError("registry request failed") from exc
-    from .remote_protocol import strict_json_bytes
-
-    snapshot = verify_registry_snapshot(strict_json_bytes(raw), clerk_key=args.clerk_key)
-    if args.clerk_key is not None:
-        trust = "explicit_pin"
-    else:
-        trust = None
-        for attempt in range(2):
-            anchor = read_registry_trust(args.trust_store, origin)
-            proofs = []
-            if (
-                anchor is not None
-                and anchor["key"] == snapshot["clerk"]
-                and anchor["count"] < snapshot["count"]
-            ):
-                proof_deadline = time.monotonic() + args.timeout
-                current = anchor["count"]
-                while current < snapshot["count"]:
-                    remaining = proof_deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise ProtocolError("registry chain verification timed out")
-                    target = min(current + MAX_CHAIN_PROOF_ENTRIES, snapshot["count"])
-                    proof_request = Request(
-                        f"{origin}/v1/chain/{current}/{target}",
-                        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
-                    )
-                    try:
-                        with urlopen(proof_request, timeout=remaining) as response:
-                            proof_raw = response.read(4 * 1024 * 1024 + 1)
-                            if (
-                                response.status != 200
-                                or len(proof_raw) > 4 * 1024 * 1024
-                                or response.geturl() != f"{origin}/v1/chain/{current}/{target}"
-                                or response.headers.get("Content-Type", "")
-                                .split(";", 1)[0]
-                                .strip()
-                                .lower()
-                                != "application/json"
-                            ):
-                                raise ProtocolError(
-                                    "registry chain endpoint returned an invalid response"
-                                )
-                    except (HTTPError, URLError, TimeoutError) as exc:
-                        raise ProtocolError("registry chain request failed") from exc
-                    proofs.append(strict_json_bytes(proof_raw))
-                    current = target
-            try:
-                trust_state = trust_registry_snapshot(
-                    args.trust_store,
-                    origin,
-                    snapshot["clerk"],
-                    snapshot["count"],
-                    snapshot["head"],
-                    proofs,
-                )
-                trust = f"tofu_{trust_state}"
-                break
-            except ProtocolError as exc:
-                if attempt == 0 and "does not match the requested range" in str(exc):
-                    continue
-                raise
-        if trust is None:
-            raise ProtocolError("registry trust anchor changed concurrently")
-    _print(
-        {
-            "registry": origin,
-            "registry_key": snapshot["clerk"],
-            "registry_key_pinned": True,
-            "registry_key_trust": trust,
-            "registry_head": snapshot["head"],
-            "problems": snapshot["problems"],
-        },
-        args.json,
-    )
+    _print(result, args.json)
     return 0
+
+
+def _provider_run(args: argparse.Namespace) -> int:
+    prepared = prepare_run(
+        args.command,
+        args.problem,
+        agent_name=args.agent_name,
+        controller=args.controller,
+        registry=args.registry,
+        registry_clerk_key=args.registry_clerk_key,
+        trust_store=args.trust_store,
+        mode=args.mode,
+        model=args.model,
+        effort=args.effort,
+        max_seconds=args.max_seconds,
+        instruction=args.instruction,
+        run_root=args.run_root,
+        work_root=args.work_root,
+        workspace_path=args.workspace,
+        workspace_server=args.server,
+    )
+    run_id = prepared["run_id"]
+    if args.background:
+        status = launch_background(run_id, run_root=args.run_root)
+        if args.json:
+            _print(status, True)
+        else:
+            print_run_dashboard(RunStore(args.run_root), run_id)
+        return 1 if status.get("state") == "failed" else 0
+    result = run_worker(run_id, run_root=args.run_root, render=not args.json)
+    if args.json:
+        _print(RunStore(args.run_root).status(run_id), True)
+    return result
+
+
+def _run_worker(args: argparse.Namespace) -> int:
+    if args.gate_fd is not None:
+        try:
+            if os.read(args.gate_fd, 1) != b"1":
+                raise ProtocolError("background worker start gate closed unexpectedly")
+        finally:
+            os.close(args.gate_fd)
+    return run_worker(args.run_id, run_root=args.run_root, render=False)
+
+
+def _run_list(args: argparse.Namespace) -> int:
+    store = RunStore(args.run_root)
+    values = [reconcile_run(value["run_id"], run_root=args.run_root) for value in store.list()]
+    if args.json:
+        _print({"runs": values}, True)
+    elif not values:
+        print("No Boule runs recorded.")
+    else:
+        print_run_list(store, values)
+    return 0
+
+
+def _run_status(args: argparse.Namespace) -> int:
+    status = reconcile_run(args.run_id, run_root=args.run_root)
+    if args.json:
+        _print(status, True)
+    else:
+        print_run_dashboard(RunStore(args.run_root), args.run_id)
+        if status.get("state") == "failed":
+            diagnostic = RunStore(args.run_root).directory(args.run_id) / "provider.stderr.log"
+            print(f"Private diagnostic: {diagnostic}")
+    return 0
+
+
+def _run_watch(args: argparse.Namespace) -> int:
+    if not math.isfinite(args.interval) or not 0 < args.interval <= 60:
+        raise ProtocolError("watch interval must be finite, greater than 0, and at most 60")
+    store = RunStore(args.run_root)
+    event_offset = 0
+    terminal = None if args.json else RunTerminal(store, args.run_id)
+    if terminal is not None:
+        terminal.start()
+    try:
+        while True:
+            status = reconcile_run(args.run_id, run_root=args.run_root)
+            if args.json:
+                events, event_offset = store.events_since(args.run_id, event_offset)
+                for event in events:
+                    _print(event, True)
+            else:
+                terminal.refresh()
+            if status.get("state") in TERMINAL_STATES:
+                return 0 if status.get("state") == "completed" else 1
+            if status.get("state") == "orphaned":
+                return 1
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        if terminal is not None:
+            terminal.close()
+
+
+def _run_stop(args: argparse.Namespace) -> int:
+    status = stop_run(args.run_id, run_root=args.run_root, force=args.force)
+    if args.json:
+        _print(status, True)
+    else:
+        print_run_dashboard(RunStore(args.run_root), args.run_id)
+    return 0
+
+
+def _run_resume(args: argparse.Namespace) -> int:
+    prepared = prepare_resume(
+        args.run_id,
+        max_seconds=args.max_seconds,
+        instruction=args.instruction,
+        model=args.model,
+        effort=args.effort,
+        run_root=args.run_root,
+    )
+    resumed_id = prepared["run_id"]
+    if args.background:
+        status = launch_background(resumed_id, run_root=args.run_root)
+        if args.json:
+            _print(status, True)
+        else:
+            print_run_dashboard(RunStore(args.run_root), resumed_id)
+        return 1 if status.get("state") == "failed" else 0
+    result = run_worker(resumed_id, run_root=args.run_root, render=not args.json)
+    if args.json:
+        _print(RunStore(args.run_root).status(resumed_id), True)
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1469,6 +1498,107 @@ def build_parser() -> argparse.ArgumentParser:
     problems.add_argument("--timeout", type=float, default=15.0)
     problems.add_argument("--json", action="store_true", help="emit compact JSON")
     problems.set_defaults(handler=_problems)
+
+    def provider_runner(name: str, label: str) -> None:
+        command = subparsers.add_parser(
+            name,
+            help=f"run a supervised {label} research session on one Boule problem",
+        )
+        command.add_argument("problem", help="problem query, for example erdos-686")
+        command.add_argument(
+            "--agent-name",
+            "--agent_name",
+            required=True,
+            dest="agent_name",
+            help="stable public agent name recorded by Boule",
+        )
+        command.add_argument(
+            "--controller",
+            help="common-control label; defaults to a private stable local-machine label",
+        )
+        command.add_argument(
+            "--registry",
+            help="signed Boule registry origin; defaults to BOULE_REGISTRY or staging",
+        )
+        command.add_argument("--registry-clerk-key", help="expected registry Ed25519 key")
+        command.add_argument(
+            "--trust-store",
+            default=str(Path.home() / ".config" / "boule" / "trusted-registries.json"),
+            help="mode-0600 registry TOFU pin store",
+        )
+        command.add_argument("--mode", choices=["formalized", "counterexample"])
+        command.add_argument("--model", help=f"optional {label} model override")
+        command.add_argument(
+            "--effort",
+            choices=sorted(PROVIDER_EFFORTS[name]),
+            help="optional provider reasoning-effort override",
+        )
+        command.add_argument(
+            "--max-seconds",
+            type=float,
+            default=3600.0,
+            help="hard local runtime limit (default: 3600)",
+        )
+        command.add_argument(
+            "--instruction",
+            help="optional bounded research direction appended to the Boule protocol prompt",
+        )
+        command.add_argument(
+            "--background", action="store_true", help="detach and manage with 'boule run'"
+        )
+        command.add_argument("--workspace", help="advanced: use an existing case checkout")
+        command.add_argument("--server", help="trusted clerk origin required with --workspace")
+        command.add_argument("--run-root", help=argparse.SUPPRESS)
+        command.add_argument("--work-root", help=argparse.SUPPRESS)
+        command.add_argument("--json", action="store_true", help="emit compact JSON")
+        command.set_defaults(handler=_provider_run)
+
+    provider_runner("codex", "Codex")
+    provider_runner("claude-code", "Claude Code")
+
+    run = subparsers.add_parser("run", help="inspect or stop supervised agent runs")
+    run_commands = run.add_subparsers(dest="run_command", required=True)
+    run_list = run_commands.add_parser("list", help="list local supervised runs")
+    run_list.add_argument("--run-root", help=argparse.SUPPRESS)
+    run_list.add_argument("--json", action="store_true", help="emit compact JSON")
+    run_list.set_defaults(handler=_run_list)
+    run_status = run_commands.add_parser("status", help="show one run and protocol status")
+    run_status.add_argument("run_id")
+    run_status.add_argument("--run-root", help=argparse.SUPPRESS)
+    run_status.add_argument("--json", action="store_true", help="emit compact JSON")
+    run_status.set_defaults(handler=_run_status)
+    run_watch = run_commands.add_parser("watch", help="follow one run until it finishes")
+    run_watch.add_argument("run_id")
+    run_watch.add_argument("--interval", type=float, default=1.0)
+    run_watch.add_argument("--run-root", help=argparse.SUPPRESS)
+    run_watch.add_argument("--json", action="store_true", help="stream compact JSON events")
+    run_watch.set_defaults(handler=_run_watch)
+    run_stop = run_commands.add_parser("stop", help="safely stop one supervised run")
+    run_stop.add_argument("run_id")
+    run_stop.add_argument(
+        "--force", action="store_true", help="escalate to SIGKILL after the graceful stop window"
+    )
+    run_stop.add_argument("--run-root", help=argparse.SUPPRESS)
+    run_stop.add_argument("--json", action="store_true", help="emit compact JSON")
+    run_stop.set_defaults(handler=_run_stop)
+    run_resume = run_commands.add_parser(
+        "resume", help="resume a preserved provider thread as a new supervised run"
+    )
+    run_resume.add_argument("run_id")
+    run_resume.add_argument("--max-seconds", type=float, default=600.0)
+    run_resume.add_argument("--instruction")
+    run_resume.add_argument("--model")
+    run_resume.add_argument("--effort")
+    run_resume.add_argument("--background", action="store_true")
+    run_resume.add_argument("--run-root", help=argparse.SUPPRESS)
+    run_resume.add_argument("--json", action="store_true", help="emit compact JSON")
+    run_resume.set_defaults(handler=_run_resume)
+
+    worker = subparsers.add_parser("_run-worker", help=argparse.SUPPRESS)
+    worker.add_argument("run_id")
+    worker.add_argument("--gate-fd", type=int, help=argparse.SUPPRESS)
+    worker.add_argument("--run-root", help=argparse.SUPPRESS)
+    worker.set_defaults(handler=_run_worker)
 
     registry = subparsers.add_parser("registry", help="operate the local trusted problem registry")
     registry_commands = registry.add_subparsers(dest="registry_command", required=True)

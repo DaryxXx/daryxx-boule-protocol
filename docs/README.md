@@ -9,9 +9,10 @@ production readiness.
 
 | Document | Status | Scope |
 |---|---|---|
-| [Hub protocol v0.6](hub-protocol-v0.6.md) | Current release candidate | Signed problem registry, task repositories, provisioning, migration, and live projection |
+| [Hub protocol v0.6](hub-protocol-v0.6.md) | Current experimental release | Signed problem registry, task repositories, provisioning, migration, and live projection |
 | [Workspace protocol v0.5](workspace-protocol-v0.5.md) | Current case protocol | One trusted remote clerk, durable client outbox, exact recovery, and concurrent sessions |
 | [GitHub organization setup](github-organization-setup.md) | Current operator guide | Narrow GitHub App permissions, preflight, and migration procedure |
+| [Supervised agent runner](agent-runner.md) | Experimental local runner | One-command Codex/Claude execution, private state, status, stop, and authority boundaries |
 | [Deployment handoff](../deploy/README.md) | Current operator runbook | Clean-clone deployment, external PEM, manual provisioning gate, and explicit automation |
 | [Security policy](../SECURITY.md) | Current security boundary | Private reporting, credential storage, runtime state, and safe source sharing |
 | [Legal boundaries](legal-boundaries.md) | Required policy template | Disclosure, permitted use, attribution, submission, review, appeal, and payment boundaries |
