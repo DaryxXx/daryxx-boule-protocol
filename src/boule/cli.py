@@ -6,6 +6,7 @@ import json
 import math
 import os
 import secrets
+import shlex
 import stat
 import sys
 import tempfile
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_runner import (
+    DEFAULT_REGISTRY,
     launch_background,
     prepare_resume,
     prepare_run,
@@ -22,6 +24,7 @@ from .agent_runner import (
     run_worker,
     stop_run,
 )
+from .artifact_promotion import promote_run_artifacts
 from .canonical import canonical_bytes
 from .case_scaffold import write_case_support_files
 from .clerk_api import build_server as build_clerk_server
@@ -47,9 +50,21 @@ from .registry_api import build_server as build_registry_server
 from .registry_client import fetch_registry_index
 from .remote_client import RemoteClient
 from .repository_migration import inspect_github_repository
+from .research_router import (
+    DEFAULT_ROUTER_MODEL,
+    ROUTER_MODELS,
+    ROUTER_MODES,
+    route_registry_problem,
+)
 from .run_store import TERMINAL_STATES, RunStore
 from .session_store import SessionStore, load_maintainer_key, maintainer_key_path
-from .terminal_ui import RunTerminal, print_run_dashboard, print_run_list
+from .terminal_ui import (
+    RunTerminal,
+    print_run_dashboard,
+    print_run_list,
+    progress_report,
+    usage_report,
+)
 from .workspace import Workspace
 
 
@@ -1259,7 +1274,65 @@ def _problems(args: argparse.Namespace) -> int:
     return 0
 
 
+def _route_problem(args: argparse.Namespace) -> int:
+    selected_registry = args.registry or os.environ.get("BOULE_REGISTRY") or DEFAULT_REGISTRY
+    _index, problem, selection = route_registry_problem(
+        registry=selected_registry,
+        mode=args.mode,
+        clerk_key=args.registry_clerk_key,
+        trust_store=args.trust_store,
+        router=args.router,
+        model=args.router_model,
+        timeout=args.router_timeout,
+    )
+    public_problem = {
+        key: problem.get(key)
+        for key in ("case_id", "problem_id", "title", "task_mode", "source_url", "repo_url")
+    }
+    if args.json:
+        _print({"problem": public_problem, "selection": selection}, True)
+    else:
+        print(f"Boule selected: {problem.get('title')} · {problem.get('task_mode')}")
+        model_suffix = f" / {selection['model']}" if selection.get("model") else ""
+        print(f"Method: {selection['method']}{model_suffix} · confidence {selection['confidence']}")
+        print(f"Why: {selection['reason']}")
+        print(f"Suggested focus: {selection['suggested_focus']}")
+        if selection.get("warning"):
+            print(f"Note: {selection['warning']}")
+    return 0
+
+
 def _provider_run(args: argparse.Namespace) -> int:
+    auto_select = args.workspace is None and (
+        args.problem is None or args.problem.strip().casefold() == "auto"
+    )
+    if not args.json:
+        target = (
+            "public staging"
+            if (args.registry or os.environ.get("BOULE_REGISTRY") or DEFAULT_REGISTRY)
+            == DEFAULT_REGISTRY
+            else "custom signed registry"
+        )
+        selection = (
+            f"{args.router} routing"
+            + (
+                " · advisor usage is separate"
+                if args.router != "deterministic"
+                else " · no advisor turn"
+            )
+            if auto_select
+            else "manual problem selection"
+        )
+        token_target = (
+            f"{args.max_tokens:,} reported-token accounting target · not a hard cutoff"
+            if args.max_tokens is not None
+            else "no token accounting target"
+        )
+        print(f"Boule preparing · {target} · {selection}")
+        print(
+            f"Limits · {int(args.max_seconds)}s hard runtime · {token_target} · "
+            "signed case metadata may be public"
+        )
     prepared = prepare_run(
         args.command,
         args.problem,
@@ -1274,6 +1347,9 @@ def _provider_run(args: argparse.Namespace) -> int:
         max_seconds=args.max_seconds,
         instruction=args.instruction,
         max_tokens=args.max_tokens,
+        router=args.router,
+        router_model=args.router_model,
+        router_timeout=args.router_timeout,
         run_root=args.run_root,
         work_root=args.work_root,
         workspace_path=args.workspace,
@@ -1315,6 +1391,44 @@ def _run_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _local_usage(args: argparse.Namespace) -> int:
+    store = RunStore.open_existing(args.run_root)
+    values = store.list() if store is not None else []
+    report = usage_report(values, days=args.days)
+    if args.json:
+        _print(report, True)
+    elif not values:
+        print("No Boule runs recorded; provider usage is unavailable, not zero.")
+    else:
+        assert store is not None
+        print_run_dashboard(
+            store,
+            values[0]["run_id"],
+            view="usage",
+            all_runs=values,
+            usage_days=args.days,
+        )
+    return 0
+
+
+def _local_progress(args: argparse.Namespace) -> int:
+    store = RunStore.open_existing(args.run_root)
+    if store is None:
+        raise ProtocolError("no Boule run is available; pass a run id after one exists")
+    run_id = args.run_id
+    if run_id is None:
+        values = store.list()
+        if not values:
+            raise ProtocolError("no Boule run is available; pass a run id after one exists")
+        run_id = str(values[0]["run_id"])
+    status = store.status(run_id)
+    if args.json:
+        _print(progress_report(status), True)
+    else:
+        print_run_dashboard(store, run_id, view="progress")
+    return 0
+
+
 def _run_status(args: argparse.Namespace) -> int:
     status = reconcile_run(args.run_id, run_root=args.run_root)
     if args.json:
@@ -1348,7 +1462,10 @@ def _run_watch(args: argparse.Namespace) -> int:
                 return 0 if status.get("state") == "completed" else 1
             if status.get("state") == "orphaned":
                 return 1
-            time.sleep(args.interval)
+            if terminal is not None:
+                terminal.wait(args.interval)
+            else:
+                time.sleep(args.interval)
     except KeyboardInterrupt:
         return 130
     finally:
@@ -1387,6 +1504,41 @@ def _run_resume(args: argparse.Namespace) -> int:
     if args.json:
         _print(RunStore(args.run_root).status(resumed_id), True)
     return result
+
+
+def _run_promote(args: argparse.Namespace) -> int:
+    reconcile_run(args.run_id, run_root=args.run_root)
+    result = promote_run_artifacts(
+        args.run_id,
+        run_root=args.run_root,
+        confirm=args.confirm,
+    )
+    if args.json:
+        _print(result, True)
+        return 0
+    if result["status"] == "review_required":
+        print(
+            f"Boule retained {result['artifact_count']} exact artifact(s) from "
+            f"handoff {result['handoff_id']}."
+        )
+        for artifact in result["artifacts"]:
+            print(f"  {artifact['source_ref']} · {artifact['sha256']}")
+        print(f"Disclosure: {result['disclosure']} · events: {result['event_visibility']}")
+        print("Nothing was committed or pushed. Review the files, then run:")
+        print(f"  boule run promote {args.run_id} --confirm")
+        return 0
+    print(f"Local review branch prepared: {result['branch']} · commit {str(result['commit'])[:12]}")
+    print("Review before publication:")
+    for command in result["review_commands"]:
+        print(f"  {shlex.join(command)}")
+    print(
+        "The agent checkout stays push-blocked. If the bytes and case terms are correct, "
+        "publish this exact branch and commit from a separate maintainer checkout after its "
+        "normal Git preflight:"
+    )
+    print(f"  branch {result['branch']} · commit {result['commit']}")
+    print("Boule has not pushed, verified, accepted, allocated credit, or paid anything.")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1501,12 +1653,58 @@ def build_parser() -> argparse.ArgumentParser:
     problems.add_argument("--json", action="store_true", help="emit compact JSON")
     problems.set_defaults(handler=_problems)
 
+    def router_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--router",
+            choices=sorted(ROUTER_MODES),
+            default="deterministic",
+            help=(
+                "deterministic spends no advisor tokens (default); auto/codex opt into a separate "
+                "low-cost Codex routing turn"
+            ),
+        )
+        command.add_argument(
+            "--router-model",
+            choices=sorted(ROUTER_MODELS),
+            default=DEFAULT_ROUTER_MODEL,
+            help="low-reasoning Codex model used only to rank eligible cases",
+        )
+        command.add_argument(
+            "--router-timeout",
+            type=float,
+            default=60.0,
+            help="seconds allowed for the advisory routing turn",
+        )
+
+    route = subparsers.add_parser(
+        "route",
+        help="recommend one verified idle problem without starting a research session",
+    )
+    route.add_argument(
+        "--registry",
+        help="signed Boule registry origin; defaults to BOULE_REGISTRY or staging",
+    )
+    route.add_argument("--registry-clerk-key", help="expected registry Ed25519 key")
+    route.add_argument(
+        "--trust-store",
+        default=str(Path.home() / ".config" / "boule" / "trusted-registries.json"),
+        help="mode-0600 registry TOFU pin store",
+    )
+    route.add_argument("--mode", choices=["formalized", "counterexample"])
+    router_arguments(route)
+    route.add_argument("--json", action="store_true", help="emit compact JSON")
+    route.set_defaults(handler=_route_problem)
+
     def provider_runner(name: str, label: str) -> None:
         command = subparsers.add_parser(
             name,
             help=f"run a supervised {label} research session on one Boule problem",
         )
-        command.add_argument("problem", help="problem query, for example erdos-686")
+        command.add_argument(
+            "problem",
+            nargs="?",
+            help="optional problem query; omit it (or pass auto) to let Boule choose",
+        )
         command.add_argument(
             "--agent-name",
             "--agent_name",
@@ -1529,6 +1727,7 @@ def build_parser() -> argparse.ArgumentParser:
             help="mode-0600 registry TOFU pin store",
         )
         command.add_argument("--mode", choices=["formalized", "counterexample"])
+        router_arguments(command)
         command.add_argument("--model", help=f"optional {label} model override")
         command.add_argument(
             "--effort",
@@ -1566,7 +1765,32 @@ def build_parser() -> argparse.ArgumentParser:
     provider_runner("codex", "Codex")
     provider_runner("claude-code", "Claude Code")
 
-    run = subparsers.add_parser("run", help="inspect or stop supervised agent runs")
+    usage = subparsers.add_parser(
+        "usage",
+        help="show provider-reported token accounting for local Boule runs",
+    )
+    usage.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="number of local report days to include, from 1 to 31 (default: 7)",
+    )
+    usage.add_argument("--run-root", help=argparse.SUPPRESS)
+    usage.add_argument("--json", action="store_true", help="emit compact JSON")
+    usage.set_defaults(handler=_local_usage)
+
+    progress = subparsers.add_parser(
+        "progress",
+        help="show evidence-based progress for one local run (latest by default)",
+    )
+    progress.add_argument("run_id", nargs="?", help="local run id; defaults to the latest run")
+    progress.add_argument("--run-root", help=argparse.SUPPRESS)
+    progress.add_argument("--json", action="store_true", help="emit compact JSON")
+    progress.set_defaults(handler=_local_progress)
+
+    run = subparsers.add_parser(
+        "run", help="inspect, resume, preserve, or stop supervised agent runs"
+    )
     run_commands = run.add_subparsers(dest="run_command", required=True)
     run_list = run_commands.add_parser("list", help="list local supervised runs")
     run_list.add_argument("--run-root", help=argparse.SUPPRESS)
@@ -1608,6 +1832,22 @@ def build_parser() -> argparse.ArgumentParser:
     run_resume.add_argument("--run-root", help=argparse.SUPPRESS)
     run_resume.add_argument("--json", action="store_true", help="emit compact JSON")
     run_resume.set_defaults(handler=_run_resume)
+    run_promote = run_commands.add_parser(
+        "promote",
+        help="retain exact handoff artifacts and prepare public-policy cases for Git review",
+    )
+    run_promote.add_argument("run_id")
+    run_promote.add_argument(
+        "--confirm",
+        action="store_true",
+        help=(
+            "after reviewing the preview, create an isolated local branch for a case whose "
+            "frozen disclosure policy is public; never pushes"
+        ),
+    )
+    run_promote.add_argument("--run-root", help=argparse.SUPPRESS)
+    run_promote.add_argument("--json", action="store_true", help="emit compact JSON")
+    run_promote.set_defaults(handler=_run_promote)
 
     worker = subparsers.add_parser("_run-worker", help=argparse.SUPPRESS)
     worker.add_argument("run_id")

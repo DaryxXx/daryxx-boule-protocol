@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import pty
 import shutil
 import stat
+import subprocess
+import termios
 import threading
 import time
 from contextlib import contextmanager
@@ -14,6 +17,10 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
+from boule.agent_runner import (
+    _git as runner_git,
+)
+from boule.agent_runner import _prompt as build_agent_prompt
 from boule.agent_runner import (
     _shared_controller_key,
     launch_background,
@@ -41,7 +48,9 @@ from boule.terminal_ui import (
     format_runtime_line,
     print_run_dashboard,
     print_run_list,
+    progress_report,
     runtime_phase,
+    usage_report,
 )
 from boule.workspace import Workspace
 
@@ -290,6 +299,35 @@ def test_provider_environment_removes_publish_credentials_without_serializing_au
     assert value["GIT_SSH_COMMAND"] == "/bin/false"
 
 
+def test_case_clone_git_rejects_protocol_rewrites_and_injected_config(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "url.ssh://attacker.invalid/.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="git version test\n", stderr="")
+
+    monkeypatch.setattr("boule.agent_runner.subprocess.run", fake_run)
+    assert runner_git(["git", "version"]) == "git version test"
+    assert captured["command"][:5] == [
+        "git",
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "protocol.https.allow=always",
+    ]
+    environment = captured["env"]
+    assert environment["GIT_ALLOW_PROTOCOL"] == "https"
+    assert environment["GIT_PROTOCOL_FROM_USER"] == "0"
+    assert environment["GIT_SSH_COMMAND"] == "/bin/false"
+    for key in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "SSH_AUTH_SOCK"):
+        assert key not in environment
+
+
 def test_run_store_is_private_and_pid_identity_rejects_reuse(tmp_path) -> None:
     store = RunStore(tmp_path / "runs")
     run_id = "run-20260101T000000-deadbeef"
@@ -383,10 +421,21 @@ def test_cli_accepts_requested_agent_name_spellings() -> None:
     )
     second = parser.parse_args(["codex", "erdos-686", "--agent_name", "Daryxx2"])
     resumed = parser.parse_args(["run", "resume", "run-example", "--max-tokens", "50000"])
+    automatic = parser.parse_args(["codex", "--agent-name", "Daryxx3"])
+    route = parser.parse_args(["route", "--router", "deterministic"])
+    promote = parser.parse_args(["run", "promote", "run-example"])
+    usage = parser.parse_args(["usage", "--days", "14"])
+    progress = parser.parse_args(["progress", "run-example"])
     assert first.agent_name == "Daryxx1"
     assert first.max_tokens == 250_000
     assert second.agent_name == "Daryxx2"
     assert resumed.max_tokens == 50_000
+    assert automatic.problem is None
+    assert automatic.router == "deterministic"
+    assert route.router == "deterministic"
+    assert promote.confirm is False
+    assert usage.days == 14
+    assert progress.run_id == "run-example"
 
 
 def test_non_finite_deadline_fails_before_provider_or_public_side_effects(tmp_path) -> None:
@@ -404,6 +453,27 @@ def test_non_finite_deadline_fails_before_provider_or_public_side_effects(tmp_pa
             effort=None,
             max_seconds=float("nan"),
             instruction=None,
+            run_root=tmp_path / "runs",
+        )
+    assert not (tmp_path / "runs").exists()
+
+
+def test_invalid_router_timeout_fails_before_provider_or_public_side_effects(tmp_path) -> None:
+    with pytest.raises(ProtocolError, match="router timeout"):
+        prepare_run(
+            "codex",
+            None,
+            agent_name="Daryxx1",
+            controller=None,
+            registry=None,
+            registry_clerk_key=None,
+            trust_store=None,
+            mode=None,
+            model=None,
+            effort=None,
+            max_seconds=30,
+            instruction=None,
+            router_timeout=float("nan"),
             run_root=tmp_path / "runs",
         )
     assert not (tmp_path / "runs").exists()
@@ -473,6 +543,88 @@ def _clone_case(source: Workspace, destination: Path) -> Workspace:
     (control / "receipts").mkdir()
     (control / "lock").touch()
     return Workspace(destination)
+
+
+def test_omitted_problem_routes_before_starting_the_research_session(monkeypatch, tmp_path) -> None:
+    central, maintainer = _central_case(tmp_path)
+    clone = _clone_case(central, tmp_path / "clone")
+    run_root = tmp_path / "runs"
+    selection = {
+        "schema": "boule-research-routing-decision/0.1",
+        "advisory_only": True,
+        "method": "codex-advisor",
+        "selected_case_id": "case-runner",
+        "selected_title": "Routed problem",
+        "confidence": "MEDIUM",
+        "strategy": "COMPUTATION",
+        "reason": "A signed handoff has one bounded computation ready.",
+        "suggested_focus": "Reproduce the exact finite search.",
+    }
+    seen = {}
+
+    monkeypatch.setattr("boule.agent_runner.resolve_provider_binary", lambda provider: "/bin/true")
+    monkeypatch.setattr("boule.agent_runner.preflight_provider", lambda *args: "codex test")
+    monkeypatch.setattr("boule.agent_runner._clone_case", lambda *args: clone)
+
+    def fake_route(**kwargs):
+        seen.update(kwargs)
+        return (
+            {
+                "registry": "https://registry.example",
+                "registry_key": "ed25519:registry",
+                "registry_head": "a" * 64,
+                "registry_key_trust": "explicit_pin",
+            },
+            {
+                "case_id": "case-runner",
+                "problem_id": "p-runner",
+                "title": "Routed problem",
+                "task_mode": "counterexample",
+                "clerk_url": origin,
+                "repository_commit": "b" * 40,
+                "repo_url": "https://github.com/BouleProtocol/case-runner",
+                "source_url": "https://conjectures.io/problems/case-runner",
+            },
+            selection,
+        )
+
+    with _server(central, maintainer) as origin:
+        monkeypatch.setattr("boule.agent_runner.route_registry_problem", fake_route)
+        prepared = prepare_run(
+            "codex",
+            None,
+            agent_name="DaryxxAuto",
+            controller="shared-controller",
+            registry="https://registry.example",
+            registry_clerk_key="ed25519:registry",
+            trust_store=tmp_path / "trust.json",
+            mode="counterexample",
+            model="gpt-5.6-sol",
+            effort="ultra",
+            max_seconds=300,
+            instruction=None,
+            router="auto",
+            router_model="gpt-5.6-terra",
+            router_timeout=20,
+            run_root=run_root,
+        )
+
+    assert seen["router"] == "auto"
+    assert seen["model"] == "gpt-5.6-terra"
+    assert seen["mode"] == "counterexample"
+    store = RunStore(run_root)
+    config = store.config(prepared["run_id"])
+    assert config["query"] == "auto"
+    assert config["selection"] == selection
+    assert selection["reason"] in build_agent_prompt(config)
+    assert "scheduling guidance, not mathematical evidence" in build_agent_prompt(config)
+    routing_events = [
+        item for item in store.events(prepared["run_id"]) if item.get("kind") == "routing.selected"
+    ]
+    assert len(routing_events) == 1
+    assert routing_events[0]["case_id"] == "case-runner"
+    assert routing_events[0]["method"] == "codex-advisor"
+    assert routing_events[0]["strategy"] == "COMPUTATION"
 
 
 @contextmanager
@@ -610,7 +762,7 @@ def test_worker_lease_rejects_duplicate_supervisor(tmp_path) -> None:
             },
             "HANDOFF RECORDED",
         ),
-        ({"state": "completed"}, "COMPLETED"),
+        ({"state": "completed"}, "HANDOFF SAVED · RUN CLOSED"),
         ({"state": "timed_out"}, "TIME LIMIT"),
         ({"state": "protocol_incomplete"}, "HANDOFF MISSING"),
     ],
@@ -768,8 +920,55 @@ def test_plain_terminal_fallback_is_stable_and_has_no_ansi() -> None:
     assert "codex/gpt-test/ultra" in line
     assert "activity: #5 protocol.updated (now)" in line
     assert "tokens: 247 in / 31 out (provider-reported)" in line
-    assert "token budget: 278 / 1,000 provider-reported · 27.8%" in line
+    assert "token accounting: 278 / 1,000 provider-reported · 27.8% · not hard" in line
     assert "\x1b" not in line
+
+
+def test_terminal_makes_automatic_routing_visible_without_overstating_authority() -> None:
+    status, config, events = _terminal_fixture()
+    config["selection"] = {
+        "method": "codex-advisor",
+        "model": "gpt-5.6-terra",
+        "strategy": "COMPUTATION",
+        "reason": "The signed handoff has a bounded exact search ready.",
+        "suggested_focus": "Reproduce the finite search and attach its certificate.",
+    }
+    events.append(
+        {
+            "sequence": 6,
+            "kind": "routing.selected",
+            "problem_title": "Erdos 686",
+            "strategy": "COMPUTATION",
+            "observed_at": "2026-01-01T00:02:05Z",
+        }
+    )
+    output = StringIO()
+    Console(file=output, force_terminal=False, color_system=None, width=140).print(
+        build_run_dashboard(
+            status,
+            config,
+            events,
+            now=datetime(2026, 1, 1, 0, 2, 5, tzinfo=UTC),
+            width=140,
+        )
+    )
+    text = output.getvalue()
+    assert "Chosen by Boule" in text
+    assert "codex-advisor / gpt-5.6-terra · COMPUTATION · advisory only" in text
+    assert "bounded exact search" in text
+    assert "Reproduce the finite search" in text
+
+    line = format_runtime_line(
+        status,
+        config,
+        events,
+        now=datetime(2026, 1, 1, 0, 2, 5, tzinfo=UTC),
+    )
+    assert "Boule-selected: COMPUTATION via codex-advisor/gpt-5.6-terra" in line
+    assert _timeline_label(events[-1]) == (
+        "Router",
+        "Boule selected Erdos 686 · COMPUTATION",
+    )
 
 
 def test_token_budget_waits_for_authoritative_usage_and_marks_overrun() -> None:
@@ -807,6 +1006,243 @@ def test_token_budget_waits_for_authoritative_usage_and_marks_overrun() -> None:
     )
     text = exceeded.getvalue()
     assert "278 / 200 · 139.0% · +78 over" in text
+
+
+def test_in_session_usage_view_shows_current_and_daily_report_coverage() -> None:
+    status, config, events = _terminal_fixture()
+    pending = {
+        "run_id": "run-20260101T010000-aabbccdd",
+        "state": "running",
+        "started_at": "2026-01-01T01:00:00Z",
+        "updated_at": "2026-01-01T01:02:00Z",
+        "usage": None,
+    }
+    output = StringIO()
+    Console(file=output, force_terminal=False, color_system=None, width=140).print(
+        build_run_dashboard(
+            status,
+            config,
+            events,
+            now=datetime(2026, 1, 1, 0, 2, 5, tzinfo=UTC),
+            width=140,
+            view="usage",
+            all_runs=[status, pending],
+        )
+    )
+    text = output.getvalue()
+    assert "Usage · current supervised turn" in text
+    assert "247 input" in text
+    assert "31 output" in text
+    assert "278 / 1,000 provider-reported · 27.8%" in text
+    assert "Local daily reports · UTC" in text
+    assert "1/2 runs" in text
+    assert "missing reports are never counted as zero" in text
+    assert "never contribution credit" in text
+
+
+def test_local_usage_report_counts_missing_provider_reports_separately() -> None:
+    status, _config, _events = _terminal_fixture()
+    pending = {
+        "run_id": "run-20260101T010000-aabbccdd",
+        "state": "running",
+        "started_at": "2026-01-01T01:00:00Z",
+        "usage": None,
+    }
+    report = usage_report(
+        [status, pending],
+        now=datetime(2026, 1, 1, 1, 5, tzinfo=UTC),
+        days=1,
+    )
+    assert report["run_count"] == 2
+    assert report["reported_run_count"] == 1
+    assert report["missing_report_count"] == 1
+    assert report["totals"]["total_tokens"] == 278
+    assert report["days"][0]["reported_runs"] == 1
+    assert report["days"][0]["runs"] == 2
+    assert report["missing_reports_count_as_zero"] is False
+
+    with pytest.raises(ProtocolError, match="between 1 and 31"):
+        usage_report([status], days=0)
+
+
+def test_top_level_local_reports_are_read_only(tmp_path, monkeypatch, capsys) -> None:
+    run_id = "run-20260101T000000-aabbccdd"
+    store = RunStore(tmp_path / "runs")
+    store.create(
+        run_id,
+        {"schema": "boule-agent-run/0.1"},
+        {
+            "state": "running",
+            "agent_name": "Daryxx1",
+            "problem_id": "problem-test",
+            "protocol": {"checkpoint_count": 1},
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+        },
+    )
+
+    def forbidden_reconcile(*_args, **_kwargs):
+        raise AssertionError("local reports must not reconcile or terminate a run")
+
+    monkeypatch.setattr("boule.cli.reconcile_run", forbidden_reconcile)
+    parser = build_parser()
+    usage_args = parser.parse_args(
+        ["usage", "--days", "2", "--run-root", str(store.root), "--json"]
+    )
+    assert usage_args.handler(usage_args) == 0
+    usage_value = json.loads(capsys.readouterr().out)
+    assert len(usage_value["days"]) == 2
+
+    rendered = {}
+
+    def capture_dashboard(*_args, **kwargs):
+        rendered.update(kwargs)
+
+    monkeypatch.setattr("boule.cli.print_run_dashboard", capture_dashboard)
+    human_usage_args = parser.parse_args(["usage", "--days", "3", "--run-root", str(store.root)])
+    assert human_usage_args.handler(human_usage_args) == 0
+    assert rendered["usage_days"] == 3
+
+    progress_args = parser.parse_args(["progress", run_id, "--run-root", str(store.root), "--json"])
+    assert progress_args.handler(progress_args) == 0
+    progress_value = json.loads(capsys.readouterr().out)
+    assert progress_value["run_id"] == run_id
+
+
+def test_usage_on_a_fresh_machine_does_not_create_local_state(tmp_path, capsys) -> None:
+    run_root = tmp_path / "missing" / "runs"
+    args = build_parser().parse_args(["usage", "--run-root", str(run_root), "--json"])
+    assert args.handler(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["run_count"] == 0
+    assert report["missing_report_count"] == 0
+    assert not run_root.exists()
+
+
+def test_in_session_progress_view_uses_signed_evidence_not_activity() -> None:
+    status, config, events = _terminal_fixture()
+    status["protocol"].update(
+        {
+            "problem_status": "OPEN",
+            "last_checkpoint": {
+                "summary": "Exact search certificate attached",
+                "next_action": "Independent reproduction",
+            },
+            "network": {
+                "sessions": 3,
+                "handoffs": 2,
+                "messages": 4,
+                "feedback": 0,
+                "handoffs_by_outcome": {"ADVANCE": 1, "NEGATIVE": 1},
+                "candidates_by_status": {},
+            },
+        }
+    )
+    output = StringIO()
+    Console(file=output, force_terminal=False, color_system=None, width=140).print(
+        build_run_dashboard(
+            status,
+            config,
+            events,
+            now=datetime(2026, 1, 1, 0, 2, 5, tzinfo=UTC),
+            width=140,
+            view="progress",
+        )
+    )
+    text = output.getvalue()
+    assert "RESUMABLE_PROGRESS" in text
+    assert "Exact search certificate attached" in text
+    assert "Independent reproduction" in text
+    assert "ADVANCE 1 · NEGATIVE 1" in text
+    assert "operational report, not evidence" in text
+    assert "No percentage solved" in text
+    assert "27.8%" not in text
+
+
+def test_local_progress_report_has_no_activity_derived_percentage() -> None:
+    status, _config, _events = _terminal_fixture()
+    status["protocol"].update(
+        {
+            "problem_status": "OPEN",
+            "checkpoint_count": 1,
+            "last_checkpoint": {
+                "summary": "Exact search certificate attached",
+                "next_action": "Independent reproduction",
+            },
+        }
+    )
+    report = progress_report(status)
+    assert report["evidence_state"] == "RESUMABLE_PROGRESS"
+    assert report["checkpoint_count"] == 1
+    assert report["percentage_solved"] is None
+    assert report["usage_or_activity_advances_progress"] is False
+
+
+def test_in_session_progress_does_not_advance_from_provider_activity() -> None:
+    status, config, events = _terminal_fixture()
+    status["protocol"] = {
+        "complete": False,
+        "claim": None,
+        "handoff": None,
+        "collaborators": [],
+        "checkpoint_count": 0,
+        "message_count": 0,
+    }
+    output = StringIO()
+    Console(file=output, force_terminal=False, color_system=None, width=140).print(
+        build_run_dashboard(status, config, events, width=140, view="progress")
+    )
+    text = output.getvalue()
+    assert "NO_DURABLE_PROGRESS" in text
+    assert "5 tools" not in text
+
+
+def test_run_terminal_supports_local_hotkeys_and_slash_commands(tmp_path) -> None:
+    run_id = "run-20260101T000000-c0ffee00"
+    status, config, _events = _terminal_fixture()
+    status["run_id"] = run_id
+    store = RunStore(tmp_path / "runs")
+    store.create(run_id, config, {key: value for key, value in status.items() if key != "run_id"})
+    terminal = RunTerminal(store, run_id, stream=StringIO(), input_stream=StringIO())
+
+    assert terminal.handle_key("u") is True
+    assert terminal.view == "usage"
+    assert terminal.handle_key("p") is True
+    assert terminal.view == "progress"
+    assert terminal.handle_key("/usage\n") is True
+    assert terminal.view == "usage"
+    assert terminal.handle_key("/progress\r") is True
+    assert terminal.view == "progress"
+    assert terminal.handle_key("\x1b") is True
+    assert terminal.view == "dashboard"
+    assert terminal.handle_key("\x03") is False
+
+
+def test_run_terminal_tty_navigation_restores_terminal_mode(tmp_path) -> None:
+    run_id = "run-20260101T000000-bada55aa"
+    status, config, _events = _terminal_fixture()
+    status["run_id"] = run_id
+    store = RunStore(tmp_path / "runs")
+    store.create(run_id, config, {key: value for key, value in status.items() if key != "run_id"})
+    master, slave = pty.openpty()
+    original = termios.tcgetattr(slave)
+    try:
+        with (
+            os.fdopen(os.dup(slave), "w", encoding="utf-8", buffering=1) as output,
+            os.fdopen(os.dup(slave), "r", encoding="utf-8", buffering=1) as input_stream,
+        ):
+            terminal = RunTerminal(store, run_id, stream=output, input_stream=input_stream)
+            terminal.start()
+            os.write(master, b"u")
+            assert terminal.poll_input() is True
+            assert terminal.view == "usage"
+            os.write(master, b"/progress\n")
+            assert terminal.poll_input() is True
+            assert terminal.view == "progress"
+            terminal.close()
+        assert termios.tcgetattr(slave) == original
+    finally:
+        os.close(master)
+        os.close(slave)
 
 
 def test_terminal_elapsed_freezes_at_the_terminal_timestamp() -> None:

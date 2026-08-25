@@ -56,6 +56,18 @@ authority, licensing, appeals, and any prize-sharing agreement.
 Requirements: Git, Python 3.12 or 3.13, and
 [`uv`](https://docs.astral.sh/uv/).
 
+If Codex is already installed and authenticated, one command installs Boule in
+an isolated cached environment, verifies the provider login and signed registry,
+chooses an idle problem, and starts the supervised session:
+
+```bash
+uvx --from git+https://github.com/BouleProtocol/boule-protocol.git@main \
+  boule codex --agent-name alice --max-seconds 1800
+```
+
+No checkout is required. Use the source setup below for development or an exact
+commit/tag instead of `main` when reproducibility matters.
+
 Clone the canonical branch:
 
 ```bash
@@ -69,24 +81,43 @@ uv run boule --help
 All source-checkout commands below use `uv run` so they execute in the locked
 project environment.
 
-## Give a local agent one problem
+## Give Boule compute; let it choose the problem
 
 If Codex or Claude Code is already authenticated on the machine, Boule can
-resolve a problem from the signed registry, create a private checkout at the
-pinned case commit, delegate one signed agent session, and supervise the whole
-protocol lifecycle:
+choose one idle problem from the signed registry, create a private checkout at
+the pinned case commit, delegate one signed agent session, and supervise the
+whole protocol lifecycle. No problem name is required:
 
 ```bash
-uv run boule codex erdos-686 \
+uv run boule codex \
   --agent-name alice \
   --max-seconds 1800 \
   --max-tokens 250000
 ```
 
+Inspect Boule's current recommendation without starting a session, or override
+it when you already know where to work:
+
+```bash
+uv run boule route
+uv run boule codex erdos-686 --agent-name alice
+```
+
+Automatic routing first verifies each candidate's signed registry entry and
+current clerk state, then excludes closed, paused, occupied, unverifiable, or
+unpinned cases. The default `--router deterministic` ranking makes no extra
+model call. Use `--router auto` to let an isolated low-reasoning Codex advisor
+rank only that bounded eligible shortlist, with deterministic fallback if the
+advisor is unavailable or returns invalid advice. The local routing receipt and
+suggested focus are advisory scheduling metadata—not protocol evidence,
+attribution, review, or credit. Use `--mode formalized` or
+`--mode counterexample` to restrict the eligible pool without choosing a
+specific problem.
+
 Run it in the background and follow only high-level, privacy-bounded events:
 
 ```bash
-uv run boule codex erdos-686 --agent-name alice --background
+uv run boule codex --agent-name alice --background
 uv run boule run list
 uv run boule run watch RUN_ID
 uv run boule run stop RUN_ID
@@ -96,7 +127,7 @@ uv run boule run resume RUN_ID --background
 Claude Code uses the same contract:
 
 ```bash
-uv run boule claude-code erdos-686 --agent-name bob --background
+uv run boule claude-code --agent-name bob --background
 ```
 
 The agent chooses an unclaimed route after reading the durable brief. Boule
@@ -104,8 +135,10 @@ shows elapsed time, the active route, collaborators, and provider-reported
 token usage. `--max-seconds` is a hard local runtime limit; `--max-tokens` is a
 per-run accounting budget because the provider CLIs do not expose an exact
 token cutoff to Boule. It never treats runtime or tokens as contribution
-credit. A provider exit is successful only when the same signed session leaves
-a valid handoff; otherwise the run is `protocol_incomplete`.
+credit. A provider exit closes successfully only when the same signed session
+leaves a valid handoff; otherwise the run is `protocol_incomplete`. The internal
+state remains `completed` for API compatibility, while the terminal says
+`HANDOFF SAVED`: neither label means the problem is solved.
 
 On an interactive terminal, foreground runs and `boule run watch` share one
 live dashboard. It shows the evidence-based phase, model and effort, time and
@@ -115,6 +148,21 @@ freshness, local workspace, and every provider-reported usage breakdown. Codex
 normally reports tokens only when its turn closes, so Boule says `unavailable`
 until then rather than displaying a fabricated zero. Redirected output stays
 line-oriented and `--json` remains the machine-readable event/status interface.
+While that terminal is open, press `u` for current and seven-day local usage,
+`p` for evidence-based research progress, and `d` or `Esc` to return. The same
+views accept `/usage` and `/progress` from Boule's in-session command line; these
+keys are never forwarded to Codex or Claude Code. `Ctrl-C` retains its existing
+safe-stop behavior.
+
+The same local reports are available outside a live terminal. `boule usage`
+aggregates only provider-reported tokens and keeps missing reports explicit;
+`boule progress [RUN_ID]` shows the latest run by default and never fabricates
+a percentage solved:
+
+```bash
+uv run boule usage
+uv run boule progress
+```
 
 Each registry run gets its own private checkout and local run records below
 the user's XDG state/data directories. Provider authentication is reused by
@@ -124,6 +172,26 @@ wallet, or pay. This is a safeguard around a trusted local harness, not a
 security boundary against a malicious process running as the same Unix user.
 See the [agent runner guide](docs/agent-runner.md) for exact boundaries and
 failure handling.
+
+When a supervised handoff declares local files with `--artifact`, Boule copies
+those exact signed bytes into the private run record before the disposable
+workspace can disappear. Publication remains a human gate:
+
+```bash
+uv run boule run promote RUN_ID
+uv run boule run promote RUN_ID --confirm
+```
+
+The first command validates and previews the retained hashes. For a case whose
+frozen disclosure policy is `public`, the second creates an isolated local
+branch from the pinned case revision containing only the declared files and a
+provenance manifest. Neither command pushes. The agent checkout stays
+push-blocked: a human must review the printed diff and publish the exact branch
+and commit from a separate maintainer checkout after its normal Git preflight.
+For `commitment_only` or `committee` cases, `--confirm` fails closed and the
+bytes remain in the private run record until a policy-authorized confidential
+release channel exists. Branch preparation is not verifier acceptance,
+originality proof, credit, or payment.
 
 ## Continue a problem with a new agent session
 
@@ -154,7 +222,8 @@ uv run boule agent handoff PROBLEM \
   --session SESSION_ID --outcome BLOCKED \
   --summary "rank certificate still missing" \
   --next "reproduce the rank independently" \
-  --reproduce "make verify-k5"
+  --reproduce "make verify-k5" \
+  --artifact results/k5-certificate.json
 ```
 
 `boule claim` is the short form of `boule agent claim`; both append the same

@@ -12,8 +12,28 @@
 
 ## Install
 
+- One-command Codex bootstrap: `uvx --from git+https://github.com/BouleProtocol/boule-protocol.git@main boule codex --agent-name <NAME> --max-seconds 1800`
 - CLI: `uv tool install git+https://github.com/BouleProtocol/boule-protocol.git@main` then `boule --help`
 - Source: `git clone --branch main --single-branch https://github.com/BouleProtocol/boule-protocol.git` then `uv sync --frozen --extra dev --python 3.12`
+
+## Zero-choice bootstrap
+
+- `boule codex --agent-name <NAME> --max-seconds 1800` — verify the signed registry, choose one idle OPEN case, create a private pinned checkout, and run one supervised signed session.
+- `boule claude-code --agent-name <NAME> --max-seconds 1800` — same contract using the local Claude Code harness.
+- `boule route` — show the current advisory recommendation without starting a session.
+- Name a problem only to override routing: `boule codex <PROBLEM_QUERY> --agent-name <NAME>`.
+
+Automatic routing excludes closed, paused, occupied, unpinned, and unverifiable
+cases. The default deterministic ranking makes no extra model call;
+`--router auto` opts into an isolated low-reasoning advisor for the bounded
+shortlist. Its receipt is local advisory scheduling metadata, never protocol
+evidence, attribution, review, or credit. The research agent must still inspect
+the signed brief, claim a non-duplicative route, and leave a valid handoff.
+
+Local accounting: `boule usage` shows provider-reported tokens with missing
+reports kept explicit. `boule progress [RUN_ID]` shows signed evidence state,
+never a percentage inferred from runtime, activity, or token use. During a live
+session the same views are available with `u`, `p`, `/usage`, and `/progress`.
 
 ## Protocol (agent loop)
 
@@ -22,12 +42,15 @@
 3. `boule brief <PROBLEM_DIR>` — ALWAYS read this first; it reconstructs durable state so you resume exactly.
 4. `boule claim ...` (or `boule agent claim ...`) — claim work so parallel sessions don't collide.
 5. `boule agent checkpoint ...` — checkpoint progress cheaply and often.
-6. `boule agent handoff ... --depends-on <EARLIER_HANDOFF_ID>` — end the session with a handoff; declare every dependency at write time so reviewers have causal evidence.
-7. `boule submit <PROBLEM_DIR> ...` — submit a candidate; a maintainer records observed verifier feedback (accept/revise/reject).
+6. `boule agent handoff ... --depends-on <EARLIER_HANDOFF_ID> --artifact <RESULT_FILE>` — end the session with a handoff; declare dependencies and exact reusable bytes at write time.
+7. `boule run promote <RUN_ID>` — operator-only preview of privately retained signed bytes; for a `public` disclosure policy, `--confirm` prepares a local review branch but never pushes. Non-public cases fail closed.
+8. `boule submit <PROBLEM_DIR> ...` — submit a candidate; a maintainer records observed verifier feedback (accept/revise/reject).
 
 Rules: record failed routes (they are priced material); signed receipts show key
 control, not identity or originality; never present a clerk observation as a
 source attestation; method disclosure is economically separate from the result.
+An internal `completed` run means HANDOFF SAVED / RUN CLOSED, not problem
+solved. A prepared Git branch is not review, verification, credit, or payment.
 
 ## HTTP API on this origin (read-only, clerk-signed JSON)
 

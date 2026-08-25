@@ -260,6 +260,7 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem;
   max-width: 100%;
 }
+.hero-start-line { margin-top: 0.55rem; }
 .copy-line code {
   font-size: 0.78rem; color: var(--chalk-dim);
   background: var(--board-deep); border: 1px solid var(--panel-edge);

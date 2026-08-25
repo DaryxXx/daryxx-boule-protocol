@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import math
+import os
 import re
+import select
 import sys
+import termios
 import time
+import tty
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -33,6 +37,7 @@ WHITE = "#e8eee9"
 ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 MATERIAL_EVENT_KINDS = frozenset(
     {
+        "routing.selected",
         "runtime.started",
         "session.started",
         "turn.started",
@@ -47,6 +52,7 @@ MATERIAL_EVENT_KINDS = frozenset(
         "runtime.finished",
     }
 )
+TERMINAL_VIEWS = frozenset({"dashboard", "usage", "progress", "help"})
 
 
 class BouleConsole(Console):
@@ -136,6 +142,102 @@ def _reported_token_total(status: dict[str, Any]) -> int | None:
     return input_tokens + output_tokens
 
 
+def _usage_parts(status: dict[str, Any]) -> dict[str, int] | None:
+    usage = status.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_output_tokens",
+    )
+    result: dict[str, int] = {}
+    for field in fields:
+        value = usage.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        result[field] = value
+    result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
+    return result
+
+
+def _usage_day(status: dict[str, Any], timezone: Any) -> date | None:
+    usage = _usage_parts(status)
+    stamp = (
+        status.get("finished_at")
+        if usage is not None and status.get("finished_at")
+        else status.get("updated_at") or status.get("started_at") or status.get("created_at")
+    )
+    parsed = _parse_time(stamp)
+    return parsed.astimezone(timezone).date() if parsed is not None else None
+
+
+def _daily_usage(
+    runs: list[dict[str, Any]], now: datetime, *, days: int = 7
+) -> list[dict[str, Any]]:
+    """Aggregate local provider reports by report day without treating missing usage as zero."""
+
+    timezone = now.tzinfo or UTC
+    today = now.date()
+    rows = []
+    for offset in range(days):
+        target = today - timedelta(days=offset)
+        matching = [run for run in runs if _usage_day(run, timezone) == target]
+        reported = [_usage_parts(run) for run in matching]
+        valid = [item for item in reported if item is not None]
+        rows.append(
+            {
+                "date": target,
+                "runs": len(matching),
+                "reported_runs": len(valid),
+                "input_tokens": sum(item["input_tokens"] for item in valid),
+                "output_tokens": sum(item["output_tokens"] for item in valid),
+                "total_tokens": sum(item["total_tokens"] for item in valid),
+            }
+        )
+    return rows
+
+
+def usage_report(
+    runs: list[dict[str, Any]], *, now: datetime | None = None, days: int = 7
+) -> dict[str, Any]:
+    """Return a bounded local accounting report without inventing missing usage."""
+
+    if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 31:
+        raise ProtocolError("usage days must be an integer between 1 and 31")
+    local_time = now or datetime.now().astimezone()
+    if local_time.tzinfo is None:
+        local_time = local_time.replace(tzinfo=UTC)
+    reported = [parts for run in runs if (parts := _usage_parts(run)) is not None]
+    return {
+        "schema": "boule-local-usage/0.1",
+        "timezone": local_time.tzname() or "local time",
+        "run_count": len(runs),
+        "reported_run_count": len(reported),
+        "missing_report_count": len(runs) - len(reported),
+        "totals": {
+            field: sum(item[field] for item in reported)
+            for field in (
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "reasoning_output_tokens",
+            )
+        },
+        "days": [
+            {**row, "date": row["date"].isoformat()}
+            for row in _daily_usage(runs, local_time, days=days)
+        ],
+        "provider_reported_only": True,
+        "missing_reports_count_as_zero": False,
+        "contribution_credit": False,
+    }
+
+
 def _token_budget_summary(used: int | None, budget: int) -> str:
     if used is None:
         return f"waiting for provider report · limit {budget:,}"
@@ -205,11 +307,15 @@ def _state_style(state: str) -> str:
     return CYAN
 
 
+def _state_label(state: str) -> str:
+    return "HANDOFF SAVED" if state == "completed" else state.upper()
+
+
 def runtime_phase(status: dict[str, Any]) -> tuple[str, int]:
     state = str(status.get("state") or "unknown")
     protocol = status.get("protocol") if isinstance(status.get("protocol"), dict) else {}
     if state == "completed":
-        return "COMPLETED", 5
+        return "HANDOFF SAVED · RUN CLOSED", 5
     if state == "failed":
         return "FAILED", 5
     if state == "timed_out":
@@ -289,7 +395,7 @@ def _details(rows: list[tuple[str, Any]]) -> Table:
 
 
 def _stages(status: dict[str, Any]) -> Text:
-    labels = ("SETUP", "ORIENT", "CLAIM", "RESEARCH", "HANDOFF", "DONE")
+    labels = ("SETUP", "ORIENT", "CLAIM", "RESEARCH", "HANDOFF", "CLOSED")
     phase, current = runtime_phase(status)
     terminal_failure = status.get("state") in {
         "failed",
@@ -314,6 +420,11 @@ def _stages(status: dict[str, Any]) -> Text:
 
 def _timeline_label(event: dict[str, Any]) -> tuple[str, str]:
     kind = str(event.get("kind"))
+    if kind == "routing.selected":
+        title = _clean(event.get("problem_title"), 100) or "verified case"
+        strategy = _clean(event.get("strategy"), 40)
+        suffix = f" · {strategy}" if strategy else ""
+        return "Router", f"Boule selected {title}{suffix}"
     if kind == "runtime.started":
         return "Runtime", "Supervisor started the provider"
     if kind == "session.started":
@@ -406,6 +517,125 @@ def _timeline(events: list[dict[str, Any]], now: datetime) -> Table:
     return table
 
 
+def _progress_assessment(status: dict[str, Any]) -> tuple[str, str]:
+    """Return a deterministic evidence state, never an activity-derived completion score."""
+
+    protocol = status.get("protocol") if isinstance(status.get("protocol"), dict) else {}
+    problem_status = str(protocol.get("problem_status") or "OPEN")
+    if problem_status == "SOLVED":
+        return "SOLUTION_CONFIRMED", "Trusted final resolution recorded"
+    if problem_status == "ACCEPTANCE_RECORDED":
+        return "VERIFIER_ACCEPTED", "Approved review recorded; clerk finalization pending"
+    if problem_status in {"VERIFICATION_PENDING", "REVIEW_PENDING", "CANDIDATE_READY"}:
+        return problem_status, "Candidate exists; external verification is not complete"
+    if problem_status == "OPEN_AFTER_FEEDBACK":
+        return "FEEDBACK_RECEIVED", "External feedback returned the case to research"
+
+    handoff = protocol.get("handoff") if isinstance(protocol.get("handoff"), dict) else None
+    if handoff:
+        outcome = str(handoff.get("outcome") or "").upper()
+        return {
+            "ADVANCE": ("ADVANCE_UNREVIEWED", "Evidence-linked advance queued for review"),
+            "NEGATIVE": ("NEGATIVE_RESULT_RECORDED", "Reusable route boundary recorded"),
+            "BLOCKED": ("BLOCKER_RECORDED", "Reproducible blocker preserved for continuation"),
+            "NO_SIGNAL": ("NO_DURABLE_ADVANCE", "Handoff recorded without a positive advance"),
+        }.get(outcome, ("HANDOFF_RECORDED", "Signed handoff recorded"))
+
+    checkpoints = protocol.get("checkpoint_count")
+    if isinstance(checkpoints, int) and checkpoints > 0:
+        return "RESUMABLE_PROGRESS", "Signed checkpoint recorded; no reviewed handoff yet"
+    if protocol.get("claim"):
+        return "RESEARCH_IN_PROGRESS", "Claim active; no durable evidence handoff yet"
+    return "NO_DURABLE_PROGRESS", "No signed checkpoint or handoff recorded yet"
+
+
+def progress_report(status: dict[str, Any]) -> dict[str, Any]:
+    """Project durable evidence state for one run, never a percentage solved."""
+
+    protocol = status.get("protocol") if isinstance(status.get("protocol"), dict) else {}
+    assessment, meaning = _progress_assessment(status)
+    return {
+        "schema": "boule-local-progress/0.1",
+        "run_id": status.get("run_id"),
+        "agent_name": status.get("agent_name"),
+        "problem_id": status.get("problem_id"),
+        "run_state": status.get("state"),
+        "evidence_state": assessment,
+        "meaning": meaning,
+        "problem_status": protocol.get("problem_status") or "OPEN",
+        "claim": protocol.get("claim") if isinstance(protocol.get("claim"), dict) else None,
+        "checkpoint_count": (
+            protocol.get("checkpoint_count")
+            if isinstance(protocol.get("checkpoint_count"), int)
+            else None
+        ),
+        "last_checkpoint": (
+            protocol.get("last_checkpoint")
+            if isinstance(protocol.get("last_checkpoint"), dict)
+            else None
+        ),
+        "handoff": (protocol.get("handoff") if isinstance(protocol.get("handoff"), dict) else None),
+        "latest_feedback": (
+            protocol.get("latest_feedback")
+            if isinstance(protocol.get("latest_feedback"), dict)
+            else None
+        ),
+        "network": (protocol.get("network") if isinstance(protocol.get("network"), dict) else {}),
+        "percentage_solved": None,
+        "usage_or_activity_advances_progress": False,
+    }
+
+
+def _navigation_footer(
+    status: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    command_prompt: str | None = None,
+    notice: str | None = None,
+) -> Text:
+    footer = Text()
+    if command_prompt is not None:
+        footer.append("Command  ", style=MUTED)
+        footer.append(command_prompt, style=f"bold {WHITE}")
+        footer.append("  ·  Enter run  ·  Esc cancel", style=MUTED)
+        return footer
+    footer.append("d", style=f"bold {GOLD}")
+    footer.append(" Dashboard  ·  ", style=MUTED)
+    footer.append("u", style=f"bold {GOLD}")
+    footer.append(" Usage  ·  ", style=MUTED)
+    footer.append("p", style=f"bold {GOLD}")
+    footer.append(" Progress  ·  ", style=MUTED)
+    footer.append("/", style=f"bold {GOLD}")
+    footer.append(" commands  ·  ", style=MUTED)
+    if status.get("state") not in TERMINAL_STATES:
+        footer.append("Ctrl-C", style=f"bold {GOLD}")
+        footer.append(" stop safely", style=MUTED)
+    elif status.get("state") != "completed" and status.get("provider_session_id"):
+        footer.append(f"boule run resume {_clean(status.get('run_id'), 80)}", style=CYAN)
+    elif status.get("state") == "completed":
+        promotion = status.get("promotion") if isinstance(status.get("promotion"), dict) else None
+        if promotion:
+            footer.append("Artifacts: ", style=MUTED)
+            footer.append(
+                f"local branch {_clean(promotion.get('branch'), 100)} · not pushed",
+                style=CYAN,
+            )
+        else:
+            footer.append(
+                f"boule run promote {_clean(status.get('run_id'), 80)}",
+                style=CYAN,
+            )
+            footer.append("  ·  review exact artifact bytes", style=MUTED)
+    registry = config.get("registry")
+    if isinstance(registry, dict) and registry.get("origin"):
+        footer.append("  ·  Live: ", style=MUTED)
+        footer.append(_clean(registry.get("origin"), 120), style=CYAN)
+    if notice:
+        footer.append("  ·  ", style=MUTED)
+        footer.append(_clean(notice, 120), style=RED)
+    return footer
+
+
 def build_run_dashboard(
     status: dict[str, Any],
     config: dict[str, Any],
@@ -414,10 +644,20 @@ def build_run_dashboard(
     now: datetime | None = None,
     width: int = 120,
     height: int = 50,
+    view: str = "dashboard",
+    all_runs: list[dict[str, Any]] | None = None,
+    usage_days: int = 7,
+    command_prompt: str | None = None,
+    notice: str | None = None,
 ) -> Group:
     """Build one deterministic Rich renderable from allowlisted run projections."""
 
-    current_time = (now or datetime.now(UTC)).astimezone(UTC)
+    if view not in TERMINAL_VIEWS:
+        view = "dashboard"
+    local_time = now if now is not None else datetime.now().astimezone()
+    if local_time.tzinfo is None:
+        local_time = local_time.replace(tzinfo=UTC)
+    current_time = local_time.astimezone(UTC)
     metrics = _event_metrics(events, current_time)
     state = _clean(status.get("state"), 40) or "unknown"
     phase, _stage = runtime_phase(status)
@@ -447,7 +687,7 @@ def build_run_dashboard(
     header.add_column(justify="right", no_wrap=True)
     brand = Text("◉  B O U L E", style=f"bold {GOLD}")
     brand.append("  open-source agentic research", style=MUTED)
-    state_text = Text(f"● {state.upper()}  ", style=f"bold {state_color}")
+    state_text = Text(f"● {_state_label(state)}  ", style=f"bold {state_color}")
     state_text.append(_duration(elapsed), style=WHITE)
     header.add_row(brand, state_text)
     run_line = Text()
@@ -486,9 +726,35 @@ def build_run_dashboard(
     research_rows: list[tuple[str, Any]] = [
         ("Problem", problem_label),
         ("Mode", _clean(status.get("task_mode"), 40) or "—"),
+        (
+            "Disclosure",
+            f"{_clean(config.get('disclosure'), 40) or 'unspecified'} · "
+            f"events {_clean(config.get('event_visibility'), 50) or 'unspecified'}",
+        ),
         ("Signed claim", claim_text),
         ("Latest update", update),
     ]
+    selection = config.get("selection")
+    routed = isinstance(selection, dict) and selection.get("method") not in {
+        None,
+        "manual-query",
+        "existing-workspace",
+    }
+    if routed:
+        router_method = _clean(selection.get("method"), 60) or "advisory router"
+        router_model = _clean(selection.get("model"), 60)
+        router_strategy = _clean(selection.get("strategy"), 40)
+        router_summary = router_method
+        if router_model:
+            router_summary += f" / {router_model}"
+        if router_strategy:
+            router_summary += f" · {router_strategy}"
+        router_summary += " · advisory only"
+        research_rows[2:2] = [
+            ("Chosen by Boule", router_summary),
+            ("Router reason", _clean(selection.get("reason"), 300) or "—"),
+            ("Suggested focus", _clean(selection.get("suggested_focus"), 300) or "—"),
+        ]
     if claim and claim.get("success_gate"):
         research_rows.append(("Success gate", _clean(claim.get("success_gate"), 260)))
     if claim and claim.get("falsifier"):
@@ -528,6 +794,24 @@ def build_run_dashboard(
         research_rows.append(("Next action", _clean(handoff.get("next_action"), 260) or "—"))
         if handoff.get("limitations"):
             research_rows.append(("Limitations", _clean(handoff.get("limitations"), 260)))
+    artifact_capture = (
+        status.get("artifact_capture") if isinstance(status.get("artifact_capture"), dict) else None
+    )
+    promotion = status.get("promotion") if isinstance(status.get("promotion"), dict) else None
+    if artifact_capture:
+        capture_status = _clean(artifact_capture.get("status"), 50) or "unknown"
+        if capture_status == "captured":
+            artifact_count = int(artifact_capture.get("artifact_count", 0))
+            capture_status = f"{artifact_count} exact private snapshot(s) retained"
+        research_rows.append(("Artifact retention", capture_status))
+    if promotion:
+        research_rows.append(
+            (
+                "Git promotion",
+                f"local branch {_clean(promotion.get('branch'), 100)} · "
+                f"commit {_short(promotion.get('commit'), 18)} · not pushed",
+            )
+        )
     research_panel = Panel(
         _details(research_rows),
         title=f"[bold {GOLD}]Research[/]",
@@ -641,7 +925,7 @@ def build_run_dashboard(
     runtime_panel = Panel(
         runtime_content,
         title=f"[bold {GOLD}]Runtime & accounting[/]",
-        subtitle="Provider-reported · never contribution credit",
+        subtitle="Provider-reported · token target is not a hard cutoff · never credit",
         border_style="#3b4a43",
         box=box.ROUNDED,
     )
@@ -719,21 +1003,209 @@ def build_run_dashboard(
         box=box.ROUNDED,
     )
 
-    footer = Text()
-    run_id = _clean(status.get("run_id"), 80)
-    if state not in TERMINAL_STATES:
-        footer.append("Ctrl-C", style=f"bold {GOLD}")
-        footer.append(" stop safely  ·  ", style=MUTED)
-        footer.append(f"boule run status {run_id}", style=CYAN)
-        footer.append("  ·  ", style=MUTED)
-        footer.append(f"boule run stop {run_id}", style=CYAN)
-    elif state != "completed" and status.get("provider_session_id"):
-        footer.append(f"boule run resume {run_id}", style=CYAN)
-    registry = config.get("registry")
-    if isinstance(registry, dict) and registry.get("origin"):
-        footer.append("  ·  " if footer else "", style=MUTED)
-        footer.append("Live: ", style=MUTED)
-        footer.append(_clean(registry.get("origin"), 120), style=CYAN)
+    footer = _navigation_footer(
+        status,
+        config,
+        command_prompt=command_prompt,
+        notice=notice,
+    )
+
+    if view == "usage":
+        current_parts = _usage_parts(status)
+        current_rows: list[tuple[str, Any]] = [
+            ("Current run", _clean(status.get("run_id"), 80)),
+            ("Elapsed", f"{_duration(elapsed)} · {_duration(remaining)} remaining"),
+            (
+                "Reported usage",
+                accounting
+                if current_parts is not None
+                else "Pending — this provider has not emitted a completed-turn report",
+            ),
+        ]
+        if token_budget is not None:
+            current_rows.append(
+                ("Accounting budget", _token_budget_summary(reported_tokens, token_budget))
+            )
+        current_rows.append(
+            (
+                "Reported cost",
+                reported_cost if reported_cost is not None else "Unavailable — not zero",
+            )
+        )
+        usage_panel = Panel(
+            _details(current_rows),
+            title=f"[bold {GOLD}]Usage · current supervised turn[/]",
+            subtitle="Provider-reported accounting · never contribution credit",
+            border_style="#3b4a43",
+            box=box.ROUNDED,
+        )
+
+        daily_rows = _daily_usage(all_runs or [status], local_time, days=usage_days)
+        daily_table = Table.grid(expand=True, padding=(0, 2))
+        daily_table.add_column("Day", style=MUTED, no_wrap=True)
+        daily_table.add_column("Reported tokens", style=WHITE, justify="right")
+        daily_table.add_column("Input / output", style=MUTED, justify="right")
+        daily_table.add_column("Coverage", style=CYAN, justify="right")
+        visible_days = 3 if height < 30 else 7
+        for item in daily_rows[:visible_days]:
+            coverage = f"{item['reported_runs']}/{item['runs']} runs"
+            if item["runs"] == 0:
+                coverage = "no local runs"
+            daily_table.add_row(
+                item["date"].isoformat(),
+                f"{item['total_tokens']:,}" if item["reported_runs"] else "—",
+                (
+                    f"{item['input_tokens']:,} / {item['output_tokens']:,}"
+                    if item["reported_runs"]
+                    else "—"
+                ),
+                coverage,
+            )
+        daily_panel = Panel(
+            daily_table,
+            title=f"[bold {CYAN}]Local daily reports · {local_time.tzname() or 'local time'}[/]",
+            subtitle="Grouped by report time · missing reports are never counted as zero",
+            border_style="#3b4a43",
+            box=box.ROUNDED,
+        )
+        return Group(
+            header_panel,
+            stage_panel,
+            usage_panel,
+            daily_panel,
+            Panel(footer, border_style="#3b4a43", box=box.ROUNDED, padding=(0, 1)),
+        )
+
+    if view == "progress":
+        assessment, assessment_detail = _progress_assessment(status)
+        checkpoint_total = protocol.get("checkpoint_count")
+        progress_rows: list[tuple[str, Any]] = [
+            ("Evidence state", assessment),
+            ("Meaning", assessment_detail),
+            ("Problem status", _clean(protocol.get("problem_status"), 60) or "OPEN"),
+            ("Signed claim", claim_text),
+            (
+                "Checkpoints",
+                str(checkpoint_total) if isinstance(checkpoint_total, int) else "unknown",
+            ),
+        ]
+        if last_checkpoint:
+            progress_rows.extend(
+                [
+                    ("Latest evidence", _clean(last_checkpoint.get("summary"), 320) or "Recorded"),
+                    ("Checkpoint next", _clean(last_checkpoint.get("next_action"), 280) or "—"),
+                ]
+            )
+        if handoff:
+            progress_rows.extend(
+                [
+                    (
+                        "Handoff",
+                        f"{_clean(handoff.get('outcome'), 30)} · "
+                        f"{_clean(handoff.get('status'), 60) or 'queued for review'}",
+                    ),
+                    ("Result", _clean(handoff.get("summary"), 360) or "—"),
+                    ("Next action", _clean(handoff.get("next_action"), 300) or "—"),
+                    (
+                        "Evidence links",
+                        f"{int(handoff.get('evidence_count', 0))} artifacts · "
+                        f"{int(handoff.get('dependency_count', 0))} dependencies",
+                    ),
+                ]
+            )
+        progress_panel = Panel(
+            _details(progress_rows),
+            title=f"[bold {GOLD}]Progress · durable research state[/]",
+            subtitle="Derived only from signed claims, checkpoints, handoffs, and review state",
+            border_style="#3b4a43",
+            box=box.ROUNDED,
+        )
+
+        network = protocol.get("network") if isinstance(protocol.get("network"), dict) else {}
+        outcomes = (
+            network.get("handoffs_by_outcome")
+            if isinstance(network.get("handoffs_by_outcome"), dict)
+            else {}
+        )
+        candidates = (
+            network.get("candidates_by_status")
+            if isinstance(network.get("candidates_by_status"), dict)
+            else {}
+        )
+        case_rows: list[tuple[str, Any]] = [
+            (
+                "Case handoffs",
+                " · ".join(
+                    f"{name} {int(outcomes.get(name, 0))}"
+                    for name in ("ADVANCE", "NEGATIVE", "BLOCKED", "NO_SIGNAL")
+                )
+                if outcomes
+                else f"{int(network.get('handoffs', 0))} recorded",
+            ),
+            (
+                "Candidates",
+                " · ".join(f"{_clean(key, 40)} {int(value)}" for key, value in candidates.items())
+                if candidates
+                else "none recorded",
+            ),
+            ("Official feedback", f"{int(network.get('feedback', 0))} signed observations"),
+            ("Agent update", update + " · operational report, not evidence"),
+            ("Clerk freshness", _age(protocol_age)),
+        ]
+        latest_feedback = (
+            protocol.get("latest_feedback")
+            if isinstance(protocol.get("latest_feedback"), dict)
+            else None
+        )
+        if latest_feedback:
+            case_rows.extend(
+                [
+                    (
+                        "Latest decision",
+                        f"{_clean(latest_feedback.get('stage'), 30)} · "
+                        f"{_clean(latest_feedback.get('decision'), 50)}",
+                    ),
+                    ("Feedback", _clean(latest_feedback.get("summary"), 320) or "—"),
+                    ("Feedback next", _clean(latest_feedback.get("next_action"), 280) or "—"),
+                ]
+            )
+        case_panel = Panel(
+            _details(case_rows),
+            title=f"[bold {CYAN}]Case-level signal[/]",
+            subtitle="No percentage solved · usage and activity cannot advance this state",
+            border_style="#3b4a43",
+            box=box.ROUNDED,
+        )
+        return Group(
+            header_panel,
+            stage_panel,
+            progress_panel,
+            case_panel,
+            Panel(footer, border_style="#3b4a43", box=box.ROUNDED, padding=(0, 1)),
+        )
+
+    if view == "help":
+        help_rows = [
+            ("d", "Dashboard overview"),
+            ("u", "Provider usage, accounting budget, and seven local report days"),
+            ("p", "Evidence-based progress, blockers, handoffs, and review state"),
+            ("/usage", "Open Usage from the in-session command line"),
+            ("/progress", "Open Progress from the in-session command line"),
+            ("Esc", "Return to the dashboard or cancel command entry"),
+            ("Ctrl-C", "Preserve the existing safe-stop behavior"),
+        ]
+        return Group(
+            header_panel,
+            stage_panel,
+            Panel(
+                _details(help_rows),
+                title=f"[bold {GOLD}]In-session controls[/]",
+                subtitle="Controls belong to Boule; nothing is injected into the research agent",
+                border_style="#3b4a43",
+                box=box.ROUNDED,
+            ),
+            Panel(footer, border_style="#3b4a43", box=box.ROUNDED, padding=(0, 1)),
+        )
 
     if height < 38:
         very_compact = height < 30
@@ -774,10 +1246,24 @@ def build_run_dashboard(
                 f"clerk {_age(protocol_age)}",
             ),
         ]
+        if routed:
+            compact_rows.insert(
+                1,
+                (
+                    "Boule router",
+                    f"{_clean(selection.get('method'), 40) or 'advisory'}"
+                    f"/{_clean(selection.get('model'), 40) or 'no model'} · "
+                    f"{_clean(selection.get('strategy'), 40) or 'selected'} · "
+                    f"{_clean(selection.get('suggested_focus'), 150) or 'inspect signed state'}",
+                ),
+            )
         if token_budget is not None:
             compact_rows.insert(
                 5,
-                ("Token budget", _token_budget_summary(reported_tokens, token_budget)),
+                (
+                    "Token accounting",
+                    _token_budget_summary(reported_tokens, token_budget) + " · not a hard cutoff",
+                ),
             )
         if provider_duration is not None:
             compact_rows.append(("Provider duration", provider_duration))
@@ -840,12 +1326,24 @@ def format_runtime_line(
     fields = [
         f"[{_duration(elapsed)}]",
         _clean(status.get("agent_name"), 64) or "agent",
-        f"· {str(status.get('state', 'unknown')).upper()} / {phase}",
+        f"· {_state_label(str(status.get('state', 'unknown')))} / {phase}",
     ]
     provider = _clean(status.get("provider"), 30) or "provider"
     model = _clean((config or {}).get("model"), 50) or "default-model"
     effort = _clean((config or {}).get("effort"), 24) or "default-effort"
     fields.append(f"· {provider}/{model}/{effort}")
+    selection = (config or {}).get("selection")
+    if isinstance(selection, dict) and selection.get("method") not in {
+        None,
+        "manual-query",
+        "existing-workspace",
+    }:
+        selected = _clean(selection.get("strategy"), 40) or "advisory routing"
+        route_method = _clean(selection.get("method"), 40) or "router"
+        route_model = _clean(selection.get("model"), 40)
+        if route_model:
+            route_method += f"/{route_model}"
+        fields.append(f"· Boule-selected: {selected} via {route_method}")
     if claim and claim.get("route"):
         fields.append(f"· route: {_clean(claim.get('route'), 100)}")
     latest = metrics.get("latest")
@@ -868,7 +1366,8 @@ def format_runtime_line(
     token_budget = _token_budget(config or {})
     if token_budget is not None:
         fields.append(
-            f"· token budget: {_token_budget_summary(_reported_token_total(status), token_budget)}"
+            f"· token accounting: "
+            f"{_token_budget_summary(_reported_token_total(status), token_budget)} · not hard"
         )
     provider_duration = _provider_duration(status.get("provider_duration_ms"))
     if provider_duration is not None:
@@ -888,6 +1387,7 @@ class RunTerminal:
         run_id: str,
         *,
         stream: TextIO | None = None,
+        input_stream: TextIO | None = None,
         heartbeat_seconds: float = 30.0,
     ) -> None:
         self.store = store
@@ -900,6 +1400,7 @@ class RunTerminal:
             soft_wrap=False,
         )
         self.heartbeat_seconds = heartbeat_seconds
+        self.input_stream = input_stream or sys.stdin
         self.live: Live | None = None
         self.last_plain_signature: tuple[Any, ...] | None = None
         self.last_plain_at = 0.0
@@ -907,6 +1408,11 @@ class RunTerminal:
         self._event_offset = 0
         self._events: list[dict[str, Any]] = []
         self._config: dict[str, Any] | None = None
+        self.view = "dashboard"
+        self._command_buffer: str | None = None
+        self._notice: str | None = None
+        self._input_fd: int | None = None
+        self._terminal_state: list[Any] | None = None
 
     def _values(self) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
         if self._config is None:
@@ -924,7 +1430,131 @@ class RunTerminal:
             events,
             width=self.console.size.width,
             height=self.console.size.height,
+            view=self.view,
+            all_runs=self.store.list() if self.view == "usage" else None,
+            command_prompt=(
+                f"/{self._command_buffer}▌" if self._command_buffer is not None else None
+            ),
+            notice=self._notice,
         )
+
+    def _enable_input(self) -> None:
+        if not self.console.is_terminal or not self.input_stream.isatty():
+            return
+        try:
+            descriptor = self.input_stream.fileno()
+            state = termios.tcgetattr(descriptor)
+            tty.setcbreak(descriptor)
+        except (AttributeError, OSError, termios.error, ValueError):
+            return
+        self._input_fd = descriptor
+        self._terminal_state = state
+
+    def _restore_input(self) -> None:
+        descriptor, state = self._input_fd, self._terminal_state
+        self._input_fd = None
+        self._terminal_state = None
+        if descriptor is None or state is None:
+            return
+        try:
+            termios.tcsetattr(descriptor, termios.TCSADRAIN, state)
+        except (OSError, termios.error):
+            pass
+
+    def _execute_command(self) -> None:
+        command = (self._command_buffer or "").strip().casefold()
+        self._command_buffer = None
+        aliases = {
+            "": "dashboard",
+            "dashboard": "dashboard",
+            "d": "dashboard",
+            "usage": "usage",
+            "u": "usage",
+            "progress": "progress",
+            "p": "progress",
+            "help": "help",
+            "?": "help",
+        }
+        selected = aliases.get(command)
+        if selected is None:
+            self._notice = f"Unknown command /{command}; try /usage, /progress, or /help"
+            return
+        self.view = selected
+        self._notice = None
+
+    def handle_key(self, key: str) -> bool:
+        """Apply one local dashboard key without forwarding it to the provider."""
+
+        changed = False
+        for character in key:
+            if self._command_buffer is not None:
+                if character in {"\r", "\n"}:
+                    self._execute_command()
+                    changed = True
+                elif character == "\x1b":
+                    self._command_buffer = None
+                    self._notice = None
+                    changed = True
+                elif character in {"\x7f", "\b"}:
+                    self._command_buffer = self._command_buffer[:-1]
+                    changed = True
+                elif character.isprintable() and len(self._command_buffer) < 24:
+                    self._command_buffer += character
+                    changed = True
+                continue
+            if character == "/":
+                self._command_buffer = ""
+                self._notice = None
+                changed = True
+            elif character.casefold() in {"d", "u", "p"}:
+                self.view = {
+                    "d": "dashboard",
+                    "u": "usage",
+                    "p": "progress",
+                }[character.casefold()]
+                self._notice = None
+                changed = True
+            elif character == "?":
+                self.view = "help"
+                self._notice = None
+                changed = True
+            elif character == "\x1b":
+                self.view = "dashboard"
+                self._notice = None
+                changed = True
+        return changed
+
+    def poll_input(self) -> bool:
+        """Consume ready local TTY keys without blocking the research worker."""
+
+        if self._input_fd is None:
+            return False
+        try:
+            ready, _write, _errors = select.select([self._input_fd], [], [], 0)
+            if not ready:
+                return False
+            payload = os.read(self._input_fd, 64)
+            if not payload:
+                self._restore_input()
+                return False
+            changed = self.handle_key(payload.decode("utf-8", errors="ignore"))
+            if changed:
+                self.refresh(force=True)
+            return changed
+        except (OSError, ValueError):
+            self._restore_input()
+            return False
+
+    def wait(self, seconds: float) -> None:
+        """Wait responsively so watch mode can still react to local navigation."""
+
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self.poll_input()
+            time.sleep(min(0.1, remaining))
 
     def start(self) -> None:
         if self.disabled:
@@ -939,6 +1569,7 @@ class RunTerminal:
                     vertical_overflow="ellipsis",
                 )
                 self.live.start(refresh=True)
+                self._enable_input()
             else:
                 self.refresh(force=True)
         except Exception:
@@ -951,13 +1582,7 @@ class RunTerminal:
             status, config, events = self._values()
             if self.live is not None:
                 self.live.update(
-                    build_run_dashboard(
-                        status,
-                        config,
-                        events,
-                        width=self.console.size.width,
-                        height=self.console.size.height,
-                    ),
+                    self._render_from_values(status, config, events),
                     refresh=True,
                 )
                 return
@@ -985,8 +1610,29 @@ class RunTerminal:
         except Exception:
             self._disable()
 
+    def _render_from_values(
+        self,
+        status: dict[str, Any],
+        config: dict[str, Any],
+        events: list[dict[str, Any]],
+    ) -> Group:
+        return build_run_dashboard(
+            status,
+            config,
+            events,
+            width=self.console.size.width,
+            height=self.console.size.height,
+            view=self.view,
+            all_runs=self.store.list() if self.view == "usage" else None,
+            command_prompt=(
+                f"/{self._command_buffer}▌" if self._command_buffer is not None else None
+            ),
+            notice=self._notice,
+        )
+
     def close(self) -> None:
         if self.disabled:
+            self._restore_input()
             return
         try:
             if self.live is not None:
@@ -1002,10 +1648,13 @@ class RunTerminal:
                     self.live = None
         except Exception:
             self._disable()
+        finally:
+            self._restore_input()
 
     def _disable(self) -> None:
         live, self.live = self.live, None
         self.disabled = True
+        self._restore_input()
         if live is not None:
             try:
                 live.stop()
@@ -1013,7 +1662,15 @@ class RunTerminal:
                 pass
 
 
-def print_run_dashboard(store: RunStore, run_id: str, *, stream: TextIO | None = None) -> None:
+def print_run_dashboard(
+    store: RunStore,
+    run_id: str,
+    *,
+    stream: TextIO | None = None,
+    view: str = "dashboard",
+    all_runs: list[dict[str, Any]] | None = None,
+    usage_days: int = 7,
+) -> None:
     console = BouleConsole(
         file=stream or sys.stdout,
         force_terminal=None,
@@ -1024,7 +1681,7 @@ def print_run_dashboard(store: RunStore, run_id: str, *, stream: TextIO | None =
     status = store.status(run_id)
     config = store.config(run_id)
     events = store.events(run_id)
-    if not console.is_terminal:
+    if not console.is_terminal and view == "dashboard":
         console.print(format_runtime_line(status, config, events))
         return
     console.print(
@@ -1034,6 +1691,9 @@ def print_run_dashboard(store: RunStore, run_id: str, *, stream: TextIO | None =
             events,
             width=console.size.width,
             height=console.size.height,
+            view=view,
+            all_runs=all_runs,
+            usage_days=usage_days,
         )
     )
 

@@ -7,18 +7,78 @@ contribution credit.
 ## Purpose
 
 `boule codex` and `boule claude-code` make one user's existing model access
-available to one pinned Boule problem without requiring that user to operate
-the underlying harness. Boule resolves the problem from a signed registry,
-creates a private checkout, starts a signed participant session, streams a
-small normalized status projection, and checks the final protocol state.
+available to one pinned Boule problem without requiring that user to choose a
+problem or operate the underlying harness. Boule selects from a signed
+registry, creates a private checkout, starts a signed participant session,
+streams a small normalized status projection, and checks the final protocol
+state.
+
+For a contributor with authenticated Codex and `uv`, the complete bootstrap is
+one command; provider and registry preflights run before Boule creates a public
+session:
 
 ```bash
-uv run boule codex erdos-686 \
+uvx --from git+https://github.com/BouleProtocol/boule-protocol.git@main \
+  boule codex --agent-name alice --max-seconds 1800
+```
+
+```bash
+uv run boule codex \
   --agent-name alice \
   --effort high \
   --max-seconds 1800 \
   --max-tokens 250000 \
   --background
+```
+
+## Automatic research routing
+
+Omitting the positional problem (or passing the literal `auto`) invokes the
+research router before Boule creates a public participant session. `boule
+route` runs the same selection read-only and exits:
+
+```bash
+uv run boule route
+uv run boule route --mode formalized --router deterministic
+```
+
+The router applies hard eligibility gates before any model sees a candidate:
+
+- the registry record is signed, admitted as `LIVE`, and within the bounded
+  candidate limit;
+- the case clerk's signed snapshot and hash-chain extension verify directly;
+- the problem is `OPEN`, research is not paused for review, and no active or
+  stale claim occupies it;
+- the credential-free HTTPS repository URL and pinned 40-hex commit are valid.
+
+The default `--router deterministic` ranking makes no additional model call.
+`--router auto` opts into an ephemeral, low-reasoning Codex advisor that ranks
+only the eligible shortlist. That turn loads no user config or project rules,
+exposes no shell, browser, plugins, skills, multi-agent tools, provider API-key
+variables, or Boule session capability, and returns a constrained JSON choice.
+Candidate prose is treated as untrusted data. If the advisor is unavailable,
+times out, or violates the schema, auto mode uses the deterministic ranking.
+`--router codex` is fail-closed. A single eligible case never needs a routing
+model turn. Neither
+path treats event count, runtime, token use, or compute spend as evidence of
+progress or contribution value. The advisor turn is separate from the research
+run's `--max-tokens` accounting budget; its model and method are recorded, but
+the current router does not report its token usage.
+
+The resulting local receipt records the verified registry head, bounded
+candidate briefs and their digest, advisor shortlist digest, excluded case IDs,
+ranking, selected case snapshot, method, confidence, strategy, reason, and
+suggested first focus. It is deliberately
+`advisory_only`: it creates no ledger event and grants no protocol, originality,
+review, attribution, submission, payment, or prize authority. The research
+agent must still read the signed brief and create a non-duplicative claim.
+Routing is not a reservation: concurrent launches can observe the same idle
+snapshot, so the signed claim remains the collision-control gate.
+
+To bypass routing intentionally, name a problem as before:
+
+```bash
+uv run boule codex erdos-686 --agent-name alice
 ```
 
 Useful controls:
@@ -38,6 +98,8 @@ The dashboard separates what Boule has actually observed:
 
 - runtime identity, provider/version, model, effort, elapsed and remaining
   time, plus separate time and token budget progress bars;
+- the automatic routing method, reason, strategy, and suggested focus when
+  Boule selected the case;
 - setup, orientation, claim, research, handoff, and terminal phases;
 - the latest bounded agent update plus aggregate tool and plan activity;
 - signed claim, checkpoint, handoff, review, collaborator, chat, and clerk
@@ -52,6 +114,27 @@ second time. The phase indicator is not a percentage or quality estimate. Tool
 activity is not called progress, and compute is not called contribution credit.
 In particular, Codex usage is unavailable until a terminal turn event reports
 it, so the token bar waits instead of presenting a fabricated zero.
+
+The live terminal also has local navigation. Press `u` to open current-run
+accounting plus seven daily local report buckets, `p` to open deterministic
+evidence progress, and `d` or `Esc` to return to the dashboard. Press `/` to
+enter `/usage`, `/progress`, or `/help`. This input belongs to the Boule
+supervisor and is never passed to the provider process. `Ctrl-C` remains the
+safe-stop path in a foreground run and exits only the watcher in `boule run
+watch`.
+
+The Usage view groups completed provider reports by local report date and shows
+coverage such as `3/4 runs`; an unreported run stays missing rather than
+becoming zero. The Progress view derives its state only from signed claims,
+checkpoints, handoffs, candidate/review state, and trusted clerk observations.
+Agent messages are labelled operational reports, while runtime, tool activity,
+and token use cannot advance scientific progress.
+
+Outside the live terminal, `boule usage` renders the same provider-report
+accounting across local runs and `boule progress [RUN_ID]` renders the durable
+evidence state for the named run (or the latest run when omitted). Both support
+`--json`; neither turns usage or activity into research credit or a percentage
+solved.
 
 The display is deterministic and does not launch a second model to summarize
 the first. It renders only the allowlisted normalized event projection and
@@ -87,7 +170,8 @@ The runtime and protocol planes are intentionally separate:
 - `running`, `timed_out`, `failed`, and provider exit codes describe the local
   process;
 - claims, checkpoints, messages, and handoffs are signed workspace events;
-- `completed` requires a handoff from the run's exact delegated session;
+- internal state `completed` requires a handoff from the run's exact delegated
+  session; the terminal renders this as `HANDOFF SAVED`, not “problem solved”;
 - exit code zero without that handoff becomes `protocol_incomplete`;
 - stopping a process never fabricates a release, checkpoint, or handoff.
 
@@ -97,12 +181,41 @@ recovery run inherits its parent's token budget unless `boule run resume` is
 given a new `--max-tokens` value; the new budget applies independently to that
 recovery turn.
 
+## Artifact retention and human Git promotion
+
+A handoff should attach every reusable local result with `--artifact`. When a
+supervised run closes, Boule copies only those exact signed bytes into its
+private run record and records their hashes. External evidence references stay
+references; they are not downloaded or copied.
+
+An operator can inspect and then prepare a review branch:
+
+```bash
+boule run promote RUN_ID
+boule run promote RUN_ID --confirm
+```
+
+The preview and confirmation both fetch the signed clerk handoff and revalidate
+the retained paths, sizes, hashes, and common credential patterns. Confirmation
+is available only when the frozen case disclosure policy is `public`; a
+`commitment_only` or `committee` case remains in the private run record and
+fails closed until a separate policy-authorized confidential release channel
+exists. For a public case, confirmation uses the pinned case commit and a
+temporary Git index, so unrelated workspace changes are excluded and the
+current checkout is not switched. It creates only the local branch
+`boule/handoff/HANDOFF_ID`; it never pushes. The command prints the exact diff
+plus the immutable branch and commit identity. The agent checkout remains
+push-blocked; publication must happen from a separate maintainer checkout after
+that repository's normal Git preflight. Preparing the branch is retention, not
+review, verification, acceptance, causal credit, or payment.
+
 ## Private local state
 
 By default, run metadata is written below:
 
 ```text
 ~/.local/state/boule/runs/RUN_ID/
+~/.local/state/boule/runs/RUN_ID/evidence/HANDOFF_ID/
 ~/.local/share/boule/runs/RUN_ID/workspace/
 ```
 
@@ -113,6 +226,9 @@ excerpt, usage, and the signed protocol projection; it excludes prompts,
 reasoning, tool arguments, command output, and raw model traces. Provider stderr
 is private local diagnostic material and is never added to Git or the Boule
 ledger.
+Case policy may make signed summaries and event metadata public. Retained
+artifact bytes remain private local state until a human deliberately publishes
+the prepared branch to whatever readers the case repository permits.
 
 The fresh checkout has a disabled Git push URL and a rejecting pre-push hook.
 Direct GitHub token variables, unrelated environment variables, and the SSH

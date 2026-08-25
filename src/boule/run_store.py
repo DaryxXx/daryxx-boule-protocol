@@ -6,6 +6,7 @@ import fcntl
 import os
 import re
 import signal
+import stat
 import tempfile
 import time
 from collections.abc import Iterator
@@ -142,8 +143,31 @@ def terminate_process_group(
 
 
 class RunStore:
-    def __init__(self, root: str | Path | None = None) -> None:
-        self.root = _private_dir(Path(root) if root else default_run_root())
+    def __init__(self, root: str | Path | None = None, *, create: bool = True) -> None:
+        path = Path(root) if root else default_run_root()
+        if create:
+            self.root = _private_dir(path)
+            return
+        try:
+            metadata = path.stat()
+        except OSError as exc:
+            raise ProtocolError("local run store is unavailable") from exc
+        if path.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
+            raise ProtocolError("local run store must be a private directory")
+        if metadata.st_mode & 0o077:
+            raise ProtocolError("local run store permissions must be 0700")
+        self.root = path
+
+    @classmethod
+    def open_existing(cls, root: str | Path | None = None) -> RunStore | None:
+        """Open existing local run state without creating or changing anything."""
+
+        path = Path(root) if root else default_run_root()
+        if path.is_symlink():
+            raise ProtocolError("local run store must not be a symlink")
+        if not path.exists():
+            return None
+        return cls(path, create=False)
 
     def directory(self, run_id: str) -> Path:
         if RUN_ID.fullmatch(run_id) is None:
