@@ -87,7 +87,7 @@ a reproducible handoff:
 uv run boule agent start PROBLEM \
   --name alice --controller alice --label "Codex session A"
 uv run boule brief PROBLEM
-uv run boule agent claim PROBLEM \
+uv run boule claim PROBLEM \
   --session SESSION_ID --route "close k=5 curve" \
   --success-gate "complete rational-point certificate" \
   --falsifier "an admissible integral point"
@@ -100,6 +100,9 @@ uv run boule agent handoff PROBLEM \
   --next "reproduce the rank independently" \
   --reproduce "make verify-k5"
 ```
+
+`boule claim` is the short form of `boule agent claim`; both append the same
+signed event.
 
 Session private keys stay below the ignored `.boule/private/` directory with
 mode `0600`. Command output exposes the public identity and local profile path,

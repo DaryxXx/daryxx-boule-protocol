@@ -90,6 +90,15 @@
     return Math.floor(s / 86400) + "d ago";
   }
 
+  function fmtDeadline(d) {
+    var s = Math.round((d.getTime() - Date.now()) / 1000);
+    if (s < 0) return "expired " + fmtRel(d);
+    if (s < 60) return "in " + s + "s";
+    if (s < 3600) return "in " + Math.floor(s / 60) + "m";
+    if (s < 86400) return "in " + Math.floor(s / 3600) + "h";
+    return "in " + Math.floor(s / 86400) + "d";
+  }
+
   function truncate(text, max) {
     return text.length > max ? text.slice(0, max - 1) + "…" : text;
   }
@@ -153,9 +162,17 @@
     if (!isObject(item)) return null;
     var name = asString(item.participant_id) || asString(item.label);
     if (!name) return null;
+    var controllerIds = [];
+    if (Array.isArray(item.controller_ids)) {
+      item.controller_ids.forEach(function (value) {
+        var controller = asString(value);
+        if (controller && controllerIds.indexOf(controller) < 0) controllerIds.push(controller);
+      });
+    }
     return {
       name: name,
       identityId: asString(item.identity_id),
+      controllerIds: controllerIds,
       active: item.active === true ? true : item.active === false ? false : null,
       workStatus: asString(item.work_status),
       handoffCount: typeof item.handoff_count === "number" && isFinite(item.handoff_count) && item.handoff_count >= 0
@@ -194,6 +211,7 @@
       byName[name] = {
         name: name,
         identityId: null,
+        controllerIds: [],
         active: true,
         workStatus: "active",
         handoffCount: 0,
@@ -211,6 +229,7 @@
         byName[name] = {
           name: name,
           identityId: null,
+          controllerIds: [],
           active: activeNames.indexOf(name) >= 0 ? true : null,
           workStatus: activeNames.indexOf(name) >= 0 ? "active" : null,
           handoffCount: 0,
@@ -412,7 +431,8 @@
       return;
     }
 
-    cell.appendChild(el("span", "roster-count", n + " on record"));
+    cell.appendChild(el("span", "roster-count",
+      n + " " + (n === 1 ? "identity" : "identities") + " on record"));
     renderActiveNote(cell, activeColl);
 
     var nameCounts = {};
@@ -442,6 +462,12 @@
         meta.appendChild(el("span", "roster-bit",
           rec.handoffCount + " signed handoff" + (rec.handoffCount === 1 ? "" : "s")));
       }
+      if (rec.controllerIds.length) {
+        var controller = el("span", "roster-controller",
+          "control " + rec.controllerIds.join(", "));
+        controller.title = "Self-declared common control; this does not prove independent operation.";
+        meta.appendChild(controller);
+      }
       meta.appendChild(el("span", "roster-review", rec.review || "review state not published"));
       body.appendChild(meta);
       var subBits = [];
@@ -460,12 +486,16 @@
       cell.appendChild(el("span", "roster-derived",
         "display-name groups derived from handoff activity in this snapshot"));
     }
+    if (roster.entries.some(function (rec) { return rec.controllerIds.length > 0; })) {
+      cell.appendChild(el("span", "roster-derived",
+        "control labels are self-declared; different labels do not prove independence"));
+    }
 
     var names = roster.entries.map(function (r) {
       var hint = nameCounts[r.name] > 1 ? identityHint(r.identityId) : null;
       return r.name + (hint ? " identity " + hint : "");
     });
-    cell.setAttribute("aria-label", n + " agent" + (n === 1 ? "" : "s") +
+    cell.setAttribute("aria-label", n + " agent " + (n === 1 ? "identity" : "identities") +
       " with active claims and/or signed handoffs on record, not accepted attributions: " +
       names.join(", ") +
       (activeColl.count !== null ? ". " + activeColl.count + " active now." : ""));
@@ -477,6 +507,71 @@
       activeColl.count > 0 ? "roster-active-note roster-active-note-live" : "roster-active-note",
       activeColl.count + " active now");
     cell.appendChild(note);
+  }
+
+  /* Active claims are coordination state, not credit. Show the declared route
+   * and bind the display name through the active session published in the same
+   * signed snapshot. Never infer an owner when that binding is absent. */
+  function renderClaims(cell, p) {
+    var claims = normalizeCollection(p.active_claims);
+    if (claims.count === null) {
+      cell.appendChild(el("span", "unknown-mark", "—"));
+      return;
+    }
+    if (claims.count === 0) {
+      cell.appendChild(el("span", "claim-empty", "0 active"));
+      cell.setAttribute("aria-label", "No active claims");
+      return;
+    }
+
+    cell.appendChild(el("span", "claim-count", claims.count + " active"));
+    if (!claims.items) {
+      cell.setAttribute("aria-label", claims.count + " active claims; details not published");
+      return;
+    }
+
+    var ownerBySession = {};
+    if (Array.isArray(p.active_agents)) {
+      p.active_agents.forEach(function (raw) {
+        if (!isObject(raw)) return;
+        var session = asString(raw.session_id);
+        var owner = asString(raw.participant_id) || asString(raw.label);
+        if (session && owner) ownerBySession[session] = owner;
+      });
+    }
+
+    var descriptions = [];
+    var list = el("ul", "claim-list");
+    claims.items.forEach(function (raw) {
+      if (!isObject(raw)) return;
+      var session = asString(raw.session_id);
+      var owner = session ? ownerBySession[session] : null;
+      var route = asString(raw.route);
+      var status = asString(raw.status) || "active";
+      var deadline = parseIso(asString(raw.deadline));
+      var claimId = asString(raw.claim_id);
+
+      var li = el("li", "claim-item");
+      var head = el("span", "claim-head");
+      head.appendChild(el("strong", "claim-owner", owner || "owner not published"));
+      head.appendChild(el("span", "claim-status", status));
+      li.appendChild(head);
+      li.appendChild(el("span", "claim-route", route || "route not published"));
+
+      var subBits = [];
+      if (claimId) subBits.push(claimId);
+      if (raw.parallel === true) subBits.push("parallel overlap declared");
+      if (deadline) subBits.push("deadline " + fmtDeadline(deadline));
+      if (subBits.length) {
+        var sub = el("span", "claim-sub", subBits.join(" · "));
+        if (deadline) sub.title = fmtAbs(deadline);
+        li.appendChild(sub);
+      }
+      list.appendChild(li);
+      descriptions.push((owner || "owner not published") + ": " + (route || "route not published"));
+    });
+    cell.appendChild(list);
+    cell.setAttribute("aria-label", claims.count + " active claims: " + descriptions.join("; "));
   }
 
   function renderProblems(problems) {
@@ -547,12 +642,12 @@
       else cStatus.appendChild(el("span", "unknown-mark", "—"));
       row.appendChild(cStatus);
 
-      var cAgents = td("Agents on record", "cell-roster");
+      var cAgents = td("Agent identities", "cell-roster");
       renderAgents(cAgents, p);
       row.appendChild(cAgents);
 
-      var cClaims = td("Claims", "mono-cell");
-      renderCount(cClaims, normalizeCollection(p.active_claims), "active claims");
+      var cClaims = td("Active claims", "cell-claims");
+      renderClaims(cClaims, p);
       row.appendChild(cClaims);
 
       var cActivity = td("Activity", "mono-cell");

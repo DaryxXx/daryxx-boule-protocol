@@ -180,9 +180,14 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
             script = response.read().decode("utf-8")
         assert "raw.received_at" in script
         assert "clerk-observed" in script
-        assert ">Agents on record<" in page
+        assert ">Agent identities<" in page
+        assert ">Active claims<" in page
         assert 'id="pulse-roster"' in page
         assert "function agentsOnRecord" in script
+        assert "function renderClaims" in script
+        assert "function fmtDeadline" in script
+        assert '"claim-route"' in script
+        assert "different labels do not prove independence" in script
         assert "No signed handoffs yet" in script
         assert "display-name groups derived" in script
         assert "innerHTML" not in script
@@ -358,6 +363,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
                     {
                         "participant_id": "agent-1",
                         "session_id": "session-1",
+                        "controller_id": "shared-controller",
                         "controller_key": "controller-key-one",
                         "label": "Proof route",
                         "status": "active",
@@ -365,6 +371,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
                     {
                         "participant_id": "agent-finished",
                         "session_id": "session-finished",
+                        "controller_id": "finished-controller",
                         "controller_key": "controller-key-finished",
                         "label": "Completed route",
                         "status": "active",
@@ -372,6 +379,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
                     {
                         "participant_id": "agent-finished",
                         "session_id": "session-finished-other",
+                        "controller_id": "other-controller",
                         "controller_key": "controller-key-other",
                         "label": "Same display name, independent controller",
                         "status": "active",
@@ -379,6 +387,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
                     {
                         "participant_id": "agent-stale",
                         "session_id": "session-stale",
+                        "controller_id": "shared-controller",
                         "controller_key": "controller-key-stale",
                         "label": "Stale route",
                         "status": "active",
@@ -471,6 +480,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
     assert live["case-live-001"]["active_agents"] == [
         {
             "participant_id": "agent-1",
+            "controller_id": "shared-controller",
             "session_id": "session-1",
             "label": "Proof route",
             "status": "active",
@@ -488,6 +498,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
             "latest_handoff_id": "handoff-older",
             "latest_at": "2025-12-31T23:59:00Z",
             "review_status": "queued_for_review",
+            "controller_ids": ["shared-controller"],
         },
         {
             "participant_id": "agent-finished",
@@ -500,6 +511,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
             "latest_handoff_id": "handoff-name-clash",
             "latest_at": "2026-01-01T00:01:45Z",
             "review_status": "queued_for_review",
+            "controller_ids": ["other-controller"],
         },
         {
             "participant_id": "agent-finished",
@@ -512,6 +524,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
             "latest_handoff_id": "handoff-finished",
             "latest_at": "2026-01-01T00:01:30Z",
             "review_status": "queued_for_review",
+            "controller_ids": ["finished-controller"],
         },
         {
             "participant_id": "agent-stale",
@@ -524,6 +537,7 @@ def test_live_projection_returns_verified_case_and_stale_partial_failure(tmp_pat
             "latest_handoff_id": None,
             "latest_at": None,
             "review_status": None,
+            "controller_ids": ["shared-controller"],
         },
     ]
     assert live["case-live-001"]["recent_activity"][0]["summary"] == "needs one more lemma"

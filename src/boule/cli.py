@@ -1660,21 +1660,38 @@ def build_parser() -> argparse.ArgumentParser:
     server_argument(start)
     start.set_defaults(handler=_agent_start)
 
-    def participant_command(name: str, help_text: str, handler: Any) -> argparse.ArgumentParser:
-        command = agent_commands.add_parser(name, help=help_text)
+    def participant_arguments(command: argparse.ArgumentParser) -> argparse.ArgumentParser:
         command.add_argument("problem", help="initialized problem directory")
         command.add_argument("--session", help="session id; defaults to BOULE_SESSION")
         command.add_argument("--json", action="store_true", help="emit compact JSON")
         server_argument(command)
+        return command
+
+    def participant_command(name: str, help_text: str, handler: Any) -> argparse.ArgumentParser:
+        command = participant_arguments(agent_commands.add_parser(name, help=help_text))
         command.set_defaults(handler=handler)
         return command
 
-    claim = participant_command("claim", "claim one bounded work route", _agent_claim)
-    claim.add_argument("--claim-id", help="optional stable claim id")
-    claim.add_argument("--route", required=True, help="narrow question being attempted")
-    claim.add_argument("--success-gate", required=True, help="objective success condition")
-    claim.add_argument("--falsifier", required=True, help="result that would close this route")
-    claim.add_argument("--parallel", action="store_true", help="deliberate independent overlap")
+    def claim_arguments(command: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        command.add_argument("--claim-id", help="optional stable claim id")
+        command.add_argument("--route", required=True, help="narrow question being attempted")
+        command.add_argument("--success-gate", required=True, help="objective success condition")
+        command.add_argument(
+            "--falsifier", required=True, help="result that would close this route"
+        )
+        command.add_argument(
+            "--parallel", action="store_true", help="deliberate independent overlap"
+        )
+        return command
+
+    claim_arguments(participant_command("claim", "claim one bounded work route", _agent_claim))
+    claim_shortcut = participant_arguments(
+        subparsers.add_parser(
+            "claim",
+            help="claim one bounded work route (shortcut for 'agent claim')",
+        )
+    )
+    claim_arguments(claim_shortcut).set_defaults(handler=_agent_claim)
 
     heartbeat = participant_command(
         "heartbeat", "renew an active claim with a progress commitment", _agent_heartbeat

@@ -113,6 +113,37 @@ def test_agent_can_choose_public_name(monkeypatch, tmp_path, capsys):
     assert "watch interval must be between 0 and 300 seconds" in capsys.readouterr().err
 
 
+def test_top_level_claim_shortcut_matches_agent_claim(monkeypatch, tmp_path, capsys):
+    problem = initialize(monkeypatch, tmp_path, capsys)
+    session = start(problem, capsys)
+
+    assert (
+        main(
+            [
+                "claim",
+                str(problem),
+                "--session",
+                session,
+                "--route",
+                "bounded shortcut route",
+                "--success-gate",
+                "one reproducible result",
+                "--falsifier",
+                "one exact counterexample",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    claimed = json.loads(capsys.readouterr().out)
+    assert claimed["claim_id"].startswith("c-")
+
+    assert main(["status", str(problem), "--json"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    active = [item for item in status["claims"] if item["status"] == "active"]
+    assert active[0]["route"] == "bounded shortcut route"
+
+
 def publish_solution(problem, session, capsys, handoff_id="h-proof"):
     solution = problem / "Solution.lean"
     solution.write_text("example : True := by trivial\n", encoding="utf-8")

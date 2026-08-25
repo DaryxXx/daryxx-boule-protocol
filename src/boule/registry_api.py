@@ -304,7 +304,7 @@ def _agents_on_record(state: dict[str, Any]) -> list[dict[str, Any]]:
     def ensure(participant_id: str, session_id: str) -> dict[str, Any]:
         identity_id = identity_for(participant_id, session_id)
         key = (participant_id, identity_id)
-        return records.setdefault(
+        record = records.setdefault(
             key,
             {
                 "participant_id": participant_id,
@@ -318,9 +318,15 @@ def _agents_on_record(state: dict[str, Any]) -> list[dict[str, Any]]:
                 "latest_at": None,
                 "review_status": None,
                 "_session_ids": set(),
+                "_controller_ids": set(),
                 "_latest_key": (float("-inf"), ""),
             },
         )
+        session = sessions_by_id.get(session_id)
+        controller_id = session.get("controller_id") if isinstance(session, dict) else None
+        if isinstance(controller_id, str) and controller_id:
+            record["_controller_ids"].add(controller_id)
+        return record
 
     claims = state.get("claims")
     claim_status_by_session: dict[str, str] = {}
@@ -393,11 +399,12 @@ def _agents_on_record(state: dict[str, Any]) -> list[dict[str, Any]]:
     result = []
     for record in ordered:
         record["session_count"] = len(record["_session_ids"])
+        record["controller_ids"] = sorted(record["_controller_ids"], key=str.casefold)
         result.append(
             {
                 key: value
                 for key, value in record.items()
-                if key not in {"_latest_key", "_session_ids"}
+                if key not in {"_latest_key", "_session_ids", "_controller_ids"}
             }
         )
     return result
@@ -416,7 +423,7 @@ def project_case(record: dict[str, Any], bundle: dict[str, Any]) -> dict[str, An
     active_agents = [
         {
             key: item[key]
-            for key in ("participant_id", "session_id", "label", "status")
+            for key in ("participant_id", "controller_id", "session_id", "label", "status")
             if key in item
         }
         for item in sessions

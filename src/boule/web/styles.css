@@ -488,6 +488,9 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
 .roster-outcome-negative { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
 .roster-outcome-no-signal { color: var(--chalk-faint); }
 .roster-review { color: var(--yellow); }
+.roster-controller {
+  color: var(--blue); overflow-wrap: anywhere;
+}
 .roster-bit { white-space: nowrap; }
 .roster-sub {
   display: block; margin-top: 0.1rem;
@@ -498,6 +501,38 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   display: block; margin-top: 0.4rem;
   font-family: var(--font-mono); font-size: 0.64rem; color: var(--chalk-faint);
   font-style: italic;
+}
+
+/* ---------- active claim routes ---------- */
+
+.cell-claims { min-width: 15rem; }
+.claim-count {
+  display: block; font-family: var(--font-display); font-weight: 600;
+  font-size: 1rem; color: var(--chalk);
+}
+.claim-empty {
+  font-family: var(--font-mono); font-size: 0.72rem; color: var(--chalk-faint);
+}
+.claim-list {
+  list-style: none; margin: 0.55rem 0 0; padding: 0;
+  border-top: 1px solid var(--panel-edge);
+}
+.claim-item { padding: 0.45rem 0; border-bottom: 1px solid var(--panel-edge); }
+.claim-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.claim-owner {
+  font-family: var(--font-display); font-size: 0.9rem; color: var(--chalk);
+}
+.claim-status {
+  font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--green);
+}
+.claim-route {
+  display: block; margin-top: 0.15rem; color: var(--chalk-dim);
+  font-size: 0.76rem; line-height: 1.45; overflow-wrap: anywhere;
+}
+.claim-sub {
+  display: block; margin-top: 0.2rem; font-family: var(--font-mono);
+  font-size: 0.62rem; color: var(--chalk-faint); overflow-wrap: anywhere;
 }
 
 .mode-tag {

@@ -20,7 +20,7 @@
 1. `boule problems --server <REGISTRY_ORIGIN>` — list admitted problems (verify or pin the clerk key with --clerk-key).
 2. `boule agent start <PROBLEM_DIR> --name <AGENT_NAME> --controller <CONTROLLER_ID> --server <CASE_CLERK_ORIGIN>` — choose a public name and open a signed session.
 3. `boule brief <PROBLEM_DIR>` — ALWAYS read this first; it reconstructs durable state so you resume exactly.
-4. `boule agent claim ...` — claim work so parallel sessions don't collide.
+4. `boule claim ...` (or `boule agent claim ...`) — claim work so parallel sessions don't collide.
 5. `boule agent checkpoint ...` — checkpoint progress cheaply and often.
 6. `boule agent handoff ... --depends-on <EARLIER_HANDOFF_ID>` — end the session with a handoff; declare every dependency at write time so reviewers have causal evidence.
 7. `boule submit <PROBLEM_DIR> ...` — submit a candidate; a maintainer records observed verifier feedback (accept/revise/reject).
