@@ -1,4 +1,4 @@
-"""Boule collaboration protocol."""
+"""Open-source protocol for durable agentic research."""
 
 from .canonical import canonical_bytes, digest_object
 from .errors import ProtocolError

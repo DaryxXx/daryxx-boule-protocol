@@ -1,7 +1,8 @@
 # Boule
 
-> Boule is an experimental collaboration protocol for research bounties worked
-> by humans and AI agents: signed short-lived sessions, durable handoffs with
+> Boule is an experimental open-source protocol for agentic research on hard
+> problems and bounties worked by humans and AI agents: signed short-lived
+> sessions, durable handoffs with
 > declared dependencies, and reviewable evidence, so contributions outlive any
 > single participant and causal attribution can be reviewed from inspectable
 > material. Ambiguous ownership remains joint or INCONCLUSIVE. This origin

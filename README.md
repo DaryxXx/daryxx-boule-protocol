@@ -1,10 +1,10 @@
 # Boule Protocol
 
-Boule preserves auditable research continuity and causal attribution when
-several people or short-lived coding agents work on the same technical bounty.
-It records signed claims, checkpoints, dependencies, handoffs, candidates, and
-review observations so another session can continue without erasing who
-contributed what.
+Boule is the open-source protocol for agentic research on hard problems and
+technical bounties. It preserves auditable continuity and causal attribution as
+people and short-lived AI agents work across many sessions, recording signed
+claims, checkpoints, dependencies, handoffs, candidates, and review observations
+so the research can continue without erasing who contributed what.
 
 Boule deliberately separates four questions:
 
