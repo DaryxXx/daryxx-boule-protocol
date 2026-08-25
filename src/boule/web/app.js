@@ -11,6 +11,7 @@
   var REFRESH_MS = 30000;
   var MAX_TIMELINE = 20;
   var MAX_GRAPH_NODES = 30;
+  var COLLAPSED_ROSTER_LIMIT = 2;
   var SVG_NS = "http://www.w3.org/2000/svg";
 
   var els = {
@@ -47,6 +48,8 @@
 
   var lastGoodAt = null;
   var inFlight = false;
+  var expandedRosters = Object.create(null);
+  var rosterSequence = 0;
 
   /* ---------- small helpers ---------- */
 
@@ -440,8 +443,13 @@
       nameCounts[rec.name] = (nameCounts[rec.name] || 0) + 1;
     });
     var list = el("ul", "roster");
-    roster.entries.forEach(function (rec) {
+    list.id = "agent-roster-" + (++rosterSequence);
+    var extraItems = [];
+    roster.entries.forEach(function (rec, index) {
       var li = el("li", "roster-agent" + (rec.active === true ? " roster-active" : ""));
+      if (index >= COLLAPSED_ROSTER_LIMIT && rec.active !== true) {
+        extraItems.push(li);
+      }
       var mono = el("span", "roster-monogram", monogramFor(rec.name));
       mono.setAttribute("aria-hidden", "true");
       li.appendChild(mono);
@@ -482,6 +490,25 @@
       list.appendChild(li);
     });
     cell.appendChild(list);
+    if (extraItems.length) {
+      var rosterKey = asString(p.case_id) || asString(p.problem_id);
+      var expanded = rosterKey ? expandedRosters[rosterKey] === true : false;
+      var toggle = el("button", "roster-toggle");
+      toggle.type = "button";
+      toggle.setAttribute("aria-controls", list.id);
+
+      function setExpanded(next) {
+        expanded = next;
+        extraItems.forEach(function (item) { item.hidden = !expanded; });
+        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+        toggle.textContent = expanded ? "Show fewer" : "Show " + extraItems.length + " more";
+        if (rosterKey) expandedRosters[rosterKey] = expanded;
+      }
+
+      toggle.addEventListener("click", function () { setExpanded(!expanded); });
+      setExpanded(expanded);
+      cell.appendChild(toggle);
+    }
     if (roster.derived) {
       cell.appendChild(el("span", "roster-derived",
         "display-name groups derived from handoff activity in this snapshot"));

@@ -178,12 +178,19 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
         assert 'src="app.js"' in page
         with urlopen(origin + "/app.js", timeout=5) as response:
             script = response.read().decode("utf-8")
+        with urlopen(origin + "/styles.css", timeout=5) as response:
+            styles = response.read().decode("utf-8")
         assert "raw.received_at" in script
         assert "clerk-observed" in script
         assert ">Agent identities<" in page
         assert ">Active claims<" in page
         assert 'id="pulse-roster"' in page
         assert "function agentsOnRecord" in script
+        assert "COLLAPSED_ROSTER_LIMIT = 2" in script
+        assert 'toggle.setAttribute("aria-expanded"' in script
+        assert '"Show fewer"' in script
+        assert '"roster-toggle"' in script
+        assert ".roster-agent[hidden]" in styles
         assert "function renderClaims" in script
         assert "function fmtDeadline" in script
         assert '"claim-route"' in script
