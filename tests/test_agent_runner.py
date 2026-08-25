@@ -1225,6 +1225,18 @@ def test_run_terminal_tty_navigation_restores_terminal_mode(tmp_path) -> None:
     store.create(run_id, config, {key: value for key, value in status.items() if key != "run_id"})
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
+    stop_reader = threading.Event()
+    os.set_blocking(master, False)
+
+    def drain_terminal_output() -> None:
+        while not stop_reader.wait(0.01):
+            try:
+                os.read(master, 65_536)
+            except BlockingIOError:
+                pass
+
+    reader = threading.Thread(target=drain_terminal_output, daemon=True)
+    reader.start()
     try:
         with (
             os.fdopen(os.dup(slave), "w", encoding="utf-8", buffering=1) as output,
@@ -1241,6 +1253,8 @@ def test_run_terminal_tty_navigation_restores_terminal_mode(tmp_path) -> None:
             terminal.close()
         assert termios.tcgetattr(slave) == original
     finally:
+        stop_reader.set()
+        reader.join(timeout=1)
         os.close(master)
         os.close(slave)
 
