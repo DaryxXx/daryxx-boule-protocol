@@ -89,7 +89,7 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
 }
 .brand-attribution {
   font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.04em;
-  color: var(--chalk-faint); text-decoration: none;
+  color: var(--chalk); text-decoration: none;
 }
 .brand-attribution:hover { color: var(--blue); }
 
