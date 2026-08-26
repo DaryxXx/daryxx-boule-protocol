@@ -233,6 +233,9 @@ def test_registry_api_reports_fresh_and_stale_maintainer_heartbeat(tmp_path) -> 
                 "interval_seconds": 30,
                 "automatic_admission": True,
                 "automatic_provisioning": False,
+                "provider_sync_enabled": True,
+                "provider_sync_observations": 3,
+                "provider_sync_events": 2,
                 "error_cases": [],
             }
         ),
@@ -249,6 +252,9 @@ def test_registry_api_reports_fresh_and_stale_maintainer_heartbeat(tmp_path) -> 
         assert runtime["cycle"] == 12
         assert runtime["automatic_admission"] is True
         assert runtime["automatic_provisioning"] is False
+        assert runtime["provider_sync_enabled"] is True
+        assert runtime["provider_sync_observations"] == 3
+        assert runtime["provider_sync_events"] == 2
         assert runtime["error_case_count"] == 0
         assert "pid" not in runtime
 
@@ -283,10 +289,16 @@ def test_maintainer_heartbeat_bounds_untrusted_interval_and_exact_freshness(tmp_
     assert maintainer_runtime_status(watcher, observed_at=after_boundary)["status"] == "stale"
 
     heartbeat["interval_seconds"] = 1e308
+    heartbeat["provider_sync_enabled"] = "yes"
+    heartbeat["provider_sync_observations"] = -1
+    heartbeat["provider_sync_events"] = True
     watcher.write_text(json.dumps(heartbeat), encoding="utf-8")
     bounded = maintainer_runtime_status(watcher, observed_at=boundary)
     assert bounded["status"] == "running"
     assert bounded["fresh_for_seconds"] == 120
+    assert bounded["provider_sync_enabled"] is None
+    assert bounded["provider_sync_observations"] is None
+    assert bounded["provider_sync_events"] is None
 
     watcher.write_bytes(b"{" + b" " * (64 * 1024) + b"}")
     assert maintainer_runtime_status(watcher, observed_at=boundary)["status"] == "unknown"

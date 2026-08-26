@@ -18,6 +18,13 @@ after disclosure; it cannot prevent someone who can read an idea from copying
 it. Enforceable permitted use and prize allocation still require case terms and
 causal review.
 
+Problem manifests may now embed the separate
+[`boule-provider-contract/0.1`](provider-contract.md). It maps provider-specific
+submission IDs, verifier/reviewer decisions, feedback, and settlement fields
+onto the public `OPEN`, `PENDING_VERIFICATION`, `FAILED`, and `SOLVED`
+projection without changing v0.4/v0.5 event bytes. Older Conjectures manifests
+replay through the frozen compatibility mapping; they are not rewritten.
+
 ## Topology
 
 One canonical workspace holds the event chain and maintainer key. Each person or
@@ -127,6 +134,13 @@ wrong media (`415`), semantic rejection (`422`), and busy/internal (`503`/`500`)
 The service deliberately has no remote route for maintainer observations,
 external submission, verifier/reviewer feedback, finalization, wallet action,
 allocation, or payment.
+
+The separate single registry watcher may use an installed read-only provider
+observer to inspect pending submissions and append maintainer-signed feedback
+locally. For Conjectures.io this uses its bounded public results feed. A pending
+poll appends no event; a newly terminal decision is evidence-linked and exact
+retries are idempotent. This automation does not expose the maintainer key over
+HTTP, submit a candidate, authenticate as the provider, or perform settlement.
 
 ## Git and evidence flow
 

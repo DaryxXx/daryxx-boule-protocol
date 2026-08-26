@@ -17,6 +17,7 @@ from boule.crypto import generate_private_key, public_key_text, verify_object
 from boule.errors import ProtocolError
 from boule.hub import DEFAULT_CASE_CONFIG, Hub
 from boule.problem_import import FetchResponse
+from boule.provider_contract import provider_contract_digest
 from boule.provisioner import (
     MARKER_PATH,
     GitHubAppRepositoryProvider,
@@ -170,6 +171,7 @@ def test_propose_deduplicates_by_commitment_and_admit_reimports_independently(
     assert created is True
     assert created_again is False
     assert repeated == proposal
+    assert proposal["provider_contract_digest"].startswith("sha256:")
     assert hub.registry.count == 2
 
     changed = FIXTURE.read_bytes().replace(
@@ -272,6 +274,21 @@ def test_case_workspace_rejects_changed_import_projection(tmp_path: Path) -> Non
     problem_path.write_text(json.dumps(problem))
 
     with pytest.raises(ProtocolError, match="problem does not match"):
+        hub.case_workspace(case_id)
+
+
+def test_case_workspace_policy_binds_the_provider_contract(tmp_path: Path) -> None:
+    hub, case_id, _ = provisioned_hub(tmp_path)
+    workspace = hub.case_workspace(case_id)
+    problem_path = workspace.root / "problem.json"
+    problem = json.loads(problem_path.read_text())
+    assert workspace.policy["provider_contract_digest"] == provider_contract_digest(
+        problem["provider_contract"]
+    )
+    problem["provider_contract"]["display_name"] = "Tampered provider"
+    problem_path.write_text(json.dumps(problem))
+
+    with pytest.raises(ProtocolError, match="policy"):
         hub.case_workspace(case_id)
 
 

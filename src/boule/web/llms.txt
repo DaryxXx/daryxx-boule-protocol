@@ -12,16 +12,17 @@
 
 ## Install
 
-- One-command Codex bootstrap: `uvx --from git+https://github.com/BouleProtocol/boule-protocol.git@main boule codex --agent-name <NAME> --max-seconds 1800`
+- One-command Codex bootstrap: `uvx --from git+https://github.com/BouleProtocol/boule-protocol.git@main boule codex --max-seconds 1800` (first interactive run asks and stores the public agent name).
 - CLI: `uv tool install git+https://github.com/BouleProtocol/boule-protocol.git@main` then `boule --help`
 - Source: `git clone --branch main --single-branch https://github.com/BouleProtocol/boule-protocol.git` then `uv sync --frozen --extra dev --python 3.12`
 
 ## Zero-choice bootstrap
 
-- `boule codex --agent-name <NAME> --max-seconds 1800` — verify the signed registry, choose one idle OPEN case, create a private pinned checkout, and run one supervised signed session.
-- `boule claude-code --agent-name <NAME> --max-seconds 1800` — same contract using the local Claude Code harness.
+- `boule setup --name <NAME>` — configure the private local default non-interactively; `--replace` changes it explicitly.
+- `boule codex --max-seconds 1800` — verify the signed registry, choose one idle OPEN case, create a private pinned checkout, and run one supervised signed session.
+- `boule claude-code --max-seconds 1800` — same contract using the local Claude Code harness.
 - `boule route` — show the current advisory recommendation without starting a session.
-- Name a problem only to override routing: `boule codex <PROBLEM_QUERY> --agent-name <NAME>`.
+- Name a problem only to override routing: `boule codex <PROBLEM_QUERY>`.
 
 Automatic routing excludes closed, paused, occupied, unpinned, and unverifiable
 cases. The default deterministic ranking makes no extra model call;
@@ -44,7 +45,8 @@ session the same views are available with `u`, `p`, `/usage`, and `/progress`.
 5. `boule agent checkpoint ...` — checkpoint progress cheaply and often.
 6. `boule agent handoff ... --depends-on <EARLIER_HANDOFF_ID> --artifact <RESULT_FILE>` — end the session with a handoff; declare dependencies and exact reusable bytes at write time.
 7. `boule run promote <RUN_ID>` — operator-only preview of privately retained signed bytes; for a `public` disclosure policy, `--confirm` prepares a local review branch but never pushes. Non-public cases fail closed.
-8. `boule submit <PROBLEM_DIR> ...` — submit a candidate; a maintainer records observed verifier feedback (accept/revise/reject).
+8. `boule submit <PROBLEM_DIR> ...` — seal a local candidate without contacting the provider.
+9. An authorized operator records the external receipt; the single registry maintainer automatically observes installed public status adapters. Pending polls append nothing; rejected attempts retain feedback as FAILED; approved review can resolve SOLVED. This performs no bounty action.
 
 Rules: record failed routes (they are priced material); signed receipts show key
 control, not identity or originality; never present a clerk observation as a

@@ -45,7 +45,10 @@ from .maintainer_advisor import ALLOWED_MODELS, advise
 from .policy import DISCLOSURE_MODES, build_case_policy
 from .problem_import import import_problem
 from .protocol import replay_ledger
+from .provider_contract import result_url, stage_contract
+from .provider_observer import observer_for_provider
 from .provider_runtime import PROVIDER_EFFORTS
+from .provider_sync import sync_provider_candidate
 from .provisioner import CaseProvisioner, GitHubAppRepositoryProvider, LocalRepositoryProvider
 from .registry_api import build_server as build_registry_server
 from .registry_client import fetch_registry_index
@@ -66,6 +69,13 @@ from .terminal_ui import (
     progress_report,
     usage_report,
 )
+from .user_profile import (
+    default_profile_path,
+    load_profile,
+    resolve_agent_name,
+    save_profile,
+    validate_agent_name,
+)
 from .workspace import Workspace
 
 
@@ -74,6 +84,45 @@ def _print(value: Any, compact: bool) -> None:
         print(canonical_bytes(value).decode("utf-8"))
     else:
         print(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+def _setup(args: argparse.Namespace) -> int:
+    path = default_profile_path()
+    existing = load_profile(path)
+    if args.name is None and existing is not None and not args.replace:
+        profile = existing
+        changed = False
+    else:
+        name = args.name
+        if name is None:
+            if not sys.stdin.isatty():
+                raise ProtocolError("interactive setup needs a TTY or --name YOUR_NAME")
+            try:
+                name = input("Choose your public Boule agent name: ").strip()
+            except (EOFError, KeyboardInterrupt) as exc:
+                raise ProtocolError("Boule setup was cancelled") from exc
+        profile = save_profile(
+            validate_agent_name(name),
+            path=path,
+            replace=args.replace,
+        )
+        changed = True
+    result = {
+        "agent_name": profile["agent_name"],
+        "profile": str(path),
+        "changed": changed,
+        "public_identity_notice": (
+            "This name labels signed contributions; controller identity remains separate."
+        ),
+    }
+    if args.json:
+        _print(result, True)
+    else:
+        verb = "Saved" if changed else "Using"
+        print(f"{verb} Boule agent name: {profile['agent_name']}")
+        print(f"Private profile: {path}")
+        print("You can now run `boule codex` or `boule claude-code` without --agent-name.")
+    return 0
 
 
 def _demo(args: argparse.Namespace) -> int:
@@ -653,6 +702,8 @@ def _history(args: argparse.Namespace) -> int:
             "candidates": state["candidates"],
             "feedback": state["feedback"],
             "resolutions": state["resolutions"],
+            "provider": state["provider"],
+            "provider_resolution": state["provider_resolution"],
         },
         args.json,
     )
@@ -673,6 +724,10 @@ def _brief(args: argparse.Namespace) -> int:
         f"- Task commitment: `{task['task_commitment']}`",
         f"- Source pin: `{task['formal_repository_pin']}`",
         f"- Problem status: `{state['problem_status']}`",
+        (
+            f"- Provider resolution: `{state['provider_resolution']['status']}` "
+            f"({state['provider']['display_name']})"
+        ),
         f"- Active/stale claims: {len(active)}",
         f"- Queued handoffs: {len(state['handoffs'])}",
         "",
@@ -689,6 +744,15 @@ def _brief(args: argparse.Namespace) -> int:
         lines.append("- No active claims.")
     resume = state["research_resume"]
     lines.extend(["", "## Submission/review state", "", f"- Next action: `{resume['action']}`"])
+    lines.append(f"- Provider next action: `{state['provider_resolution']['next_action']}`")
+    lines.append(
+        "- Bounty handling by Boule: "
+        + (
+            "enabled"
+            if state["provider_resolution"]["bounty"]["managed_by_boule"]
+            else "not implemented"
+        )
+    )
     if resume.get("candidate_id"):
         lines.append(f"- Candidate: `{resume['candidate_id']}`")
     if resume.get("submission_id"):
@@ -759,7 +823,9 @@ def _candidate(workspace: Workspace, candidate_id: str) -> dict[str, Any]:
 def _maintainer_record_submission(args: argparse.Namespace) -> int:
     workspace = _workspace(args)
     candidate = _candidate(workspace, args.candidate)
-    result_url = args.public_result_url or (f"https://conjectures.io/results/{args.submission_id}")
+    public_result_url = args.public_result_url or result_url(
+        workspace.provider_contract, args.submission_id
+    )
     event = workspace.append_maintainer(
         "external_submission_receipted",
         {
@@ -769,18 +835,20 @@ def _maintainer_record_submission(args: argparse.Namespace) -> int:
             **_task_payload(workspace),
             "artifact_sha256": candidate["artifact"]["sha256"],
             "submitted_at": args.submitted_at or _now(),
-            "public_result_url": result_url,
-            "source": "trusted-clerk/conjectures.io-submission",
-            "receipt": _canonical_result_reference(args.receipt, result_url, "--receipt"),
+            "public_result_url": public_result_url,
+            "source": workspace.provider_contract["submission"]["receipt_source"],
+            "receipt": _canonical_result_reference(args.receipt, public_result_url, "--receipt"),
         },
         load_maintainer_key(workspace),
     )
+    state = workspace.state(_now())
     _print(
         {
             **_public_event(event),
             "candidate_id": args.candidate,
             "submission_id": args.submission_id,
             "candidate_status": "VERIFICATION_PENDING",
+            "provider_resolution": state["provider_resolution"],
             "external_observation_only": True,
             "payment_performed": False,
         },
@@ -796,7 +864,10 @@ def _maintainer_feedback(args: argparse.Namespace) -> int:
     if not submission:
         raise ProtocolError("candidate has no recorded external submission")
     submission_id = submission["submission_id"]
-    result_url = args.public_result_url or f"https://conjectures.io/results/{submission_id}"
+    public_result_url = args.public_result_url or result_url(
+        workspace.provider_contract, submission_id
+    )
+    feedback_stage = stage_contract(workspace.provider_contract, args.stage)
     event = workspace.append_maintainer(
         "candidate_feedback_recorded",
         {
@@ -810,13 +881,9 @@ def _maintainer_feedback(args: argparse.Namespace) -> int:
             "reason_code": args.reason_code,
             "summary": args.summary,
             "next_action": args.next_action,
-            "public_result_url": result_url,
-            "source": {
-                "verifier": "trusted-clerk/conjectures.io-lean-verifier",
-                "review": "trusted-clerk/conjectures.io-human-review",
-                "reward": "trusted-clerk/conjectures.io-reward-eligibility",
-            }[args.stage],
-            "report": _canonical_result_reference(args.report, result_url, "--report"),
+            "public_result_url": public_result_url,
+            "source": feedback_stage["source"],
+            "report": _canonical_result_reference(args.report, public_result_url, "--report"),
         },
         load_maintainer_key(workspace),
     )
@@ -829,6 +896,7 @@ def _maintainer_feedback(args: argparse.Namespace) -> int:
             "stage": args.stage,
             "decision": args.decision,
             "problem_status": state["problem_status"],
+            "provider_resolution": state["provider_resolution"],
             "research_resume": state["research_resume"],
             "external_observation_only": True,
             "payment_performed": False,
@@ -854,8 +922,8 @@ def _maintainer_finalize(args: argparse.Namespace) -> int:
             **_task_payload(workspace),
             "artifact_sha256": candidate["artifact"]["sha256"],
             "public_result_url": submission["public_result_url"],
-            "source": "trusted-clerk/conjectures.io-human-review",
-            "resolution": "SOLVED",
+            "source": workspace.provider_contract["resolution"]["source"],
+            "resolution": workspace.provider_contract["resolution"]["success_status"],
             "review_event_id": review["event_id"],
             "note": args.note,
         },
@@ -868,12 +936,26 @@ def _maintainer_finalize(args: argparse.Namespace) -> int:
             "candidate_id": args.candidate,
             "submission_id": submission["submission_id"],
             "problem_status": state["problem_status"],
+            "provider_resolution": state["provider_resolution"],
             "trusted_clerk_finalization": True,
             "authenticated_external_attestation": False,
             "payment_performed": False,
         },
         args.json,
     )
+    return 0
+
+
+def _maintainer_sync_provider(args: argparse.Namespace) -> int:
+    workspace = _workspace(args)
+    result = sync_provider_candidate(
+        workspace,
+        args.candidate,
+        load_maintainer_key(workspace),
+        timeout=args.provider_timeout,
+        max_pages=args.provider_max_pages,
+    )
+    _print(result, args.json)
     return 0
 
 
@@ -1168,6 +1250,48 @@ def _registry_tick(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sync_pending_provider_cases(
+    hub: Hub, args: argparse.Namespace, errors: dict[str, str]
+) -> list[dict[str, Any]]:
+    if not args.provider_sync:
+        return []
+    observers: dict[str, Any] = {}
+    results: list[dict[str, Any]] = []
+    for record in hub.registry.problems(live_only=True):
+        case_id = record["case_id"]
+        try:
+            workspace = hub.case_workspace(case_id)
+            state = workspace.state(_now())
+            pending = [
+                candidate
+                for candidate in state["candidates"]
+                if candidate["status"] in {"VERIFICATION_PENDING", "REVIEW_PENDING", "APPROVED"}
+            ]
+            if not pending:
+                continue
+            provider_id = workspace.provider_contract["provider_id"]
+            if provider_id not in observers:
+                observers[provider_id] = observer_for_provider(
+                    provider_id,
+                    timeout=args.provider_timeout,
+                    max_pages=args.provider_max_pages,
+                )
+            observer = observers[provider_id]
+            if observer is None:
+                continue
+            for candidate in pending:
+                result = sync_provider_candidate(
+                    workspace,
+                    candidate["candidate_id"],
+                    load_maintainer_key(workspace),
+                    observer=observer,
+                )
+                results.append({"case_id": case_id, **result})
+        except (OSError, ProtocolError) as exc:
+            errors[case_id] = f"provider sync: {exc}"
+    return results
+
+
 def _registry_watch(args: argparse.Namespace) -> int:
     if args.cycles < 0:
         raise ProtocolError("watch cycles must be non-negative")
@@ -1209,8 +1333,14 @@ def _registry_watch(args: argparse.Namespace) -> int:
                         hub.activate(case_id, clerk_url)
                     except (KeyError, ProtocolError) as exc:
                         errors[case_id] = str(exc)
+            provider_sync = _sync_pending_provider_cases(hub, args, errors)
             tick = hub.tick()
-            last = {"cycle": cycle, "tick": tick, "errors": errors}
+            last = {
+                "cycle": cycle,
+                "tick": tick,
+                "errors": errors,
+                "provider_sync": provider_sync,
+            }
             hub.write_watcher_status(
                 {
                     "pid": os.getpid(),
@@ -1222,6 +1352,11 @@ def _registry_watch(args: argparse.Namespace) -> int:
                     "error_cases": sorted(errors),
                     "automatic_admission": args.auto_admit,
                     "automatic_provisioning": args.auto_provision,
+                    "provider_sync_enabled": args.provider_sync,
+                    "provider_sync_observations": len(provider_sync),
+                    "provider_sync_events": sum(
+                        len(item["events_appended"]) for item in provider_sync
+                    ),
                 }
             )
             if args.cycles == 0 or cycle < args.cycles:
@@ -1346,10 +1481,17 @@ def _route_problem(args: argparse.Namespace) -> int:
 
 
 def _provider_run(args: argparse.Namespace) -> int:
+    identity = resolve_agent_name(
+        args.agent_name,
+        interactive=sys.stdin.isatty() and not args.json,
+    )
+    args.agent_name = identity.value
     auto_select = args.workspace is None and (
         args.problem is None or args.problem.strip().casefold() == "auto"
     )
     if not args.json:
+        if identity.profile_created:
+            print(f"Boule profile created · default agent {identity.value}")
         target = (
             "public staging"
             if (args.registry or os.environ.get("BOULE_REGISTRY") or DEFAULT_REGISTRY)
@@ -1588,6 +1730,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="boule")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    setup = subparsers.add_parser(
+        "setup", help="configure the default public agent name for this local user"
+    )
+    setup.add_argument("--name", help="1-64 character public agent name; prompts when omitted")
+    setup.add_argument(
+        "--replace", action="store_true", help="replace an existing default agent name"
+    )
+    setup.add_argument("--json", action="store_true", help="emit compact machine-readable JSON")
+    setup.set_defaults(handler=_setup)
+
     demo = subparsers.add_parser("demo", help="create a local synthetic collaboration transcript")
     demo.add_argument("--output", help="new directory for ledger.jsonl and summary.json")
     demo.add_argument("--json", action="store_true", help="emit compact machine-readable JSON")
@@ -1653,10 +1805,8 @@ def build_parser() -> argparse.ArgumentParser:
     prompt.add_argument("--at", help="ISO-8601 time used to evaluate active route leases")
     prompt.set_defaults(handler=_community_agent_prompt)
 
-    init = subparsers.add_parser(
-        "init", help="import and initialize one pinned Conjectures.io problem"
-    )
-    init.add_argument("url", help="https://conjectures.io/problems/<slug> URL")
+    init = subparsers.add_parser("init", help="import and initialize one pinned provider problem")
+    init.add_argument("url", help="problem URL accepted by an installed provider adapter")
     init.add_argument("--root", default="problems", help="directory containing local cases")
     init.add_argument("--mode", choices=["formalized", "counterexample"])
     init.add_argument("--refresh-snapshot", action="store_true")
@@ -1676,7 +1826,7 @@ def build_parser() -> argparse.ArgumentParser:
     propose = subparsers.add_parser(
         "propose", help="propose one source task to a local trusted registry"
     )
-    propose.add_argument("url", help="source problem URL; v0.6 accepts Conjectures.io")
+    propose.add_argument("url", help="source problem URL accepted by an installed adapter")
     propose.add_argument("--registry", required=True, help="local Boule registry directory")
     propose.add_argument("--mode", choices=["formalized", "counterexample"])
     propose.add_argument("--json", action="store_true", help="emit compact JSON")
@@ -1751,9 +1901,8 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--agent-name",
             "--agent_name",
-            required=True,
             dest="agent_name",
-            help="stable public agent name recorded by Boule",
+            help="override the default public agent name configured by `boule setup`",
         )
         command.add_argument(
             "--controller",
@@ -2000,6 +2149,24 @@ def build_parser() -> argparse.ArgumentParser:
     registry_watch.add_argument("--auto-admit", action="store_true")
     registry_watch.add_argument("--auto-provision", action="store_true")
     registry_watch.add_argument(
+        "--provider-sync",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="observe pending submissions through installed public provider adapters",
+    )
+    registry_watch.add_argument(
+        "--provider-timeout",
+        type=float,
+        default=10.0,
+        help="seconds per public provider request",
+    )
+    registry_watch.add_argument(
+        "--provider-max-pages",
+        type=int,
+        default=3,
+        help="maximum 100-row feed pages scanned per provider cycle",
+    )
+    registry_watch.add_argument(
         "--clerk-url-template",
         help="HTTPS origin template with {case_id}; activates only after verification",
     )
@@ -2062,7 +2229,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     submit = subparsers.add_parser(
         "submit",
-        help="seal a local solution candidate without contacting Conjectures.io",
+        help="seal a local solution candidate without contacting its external provider",
     )
     submit.add_argument("problem", help="initialized problem directory")
     submit.add_argument("--session", help="session id; defaults to BOULE_SESSION")
@@ -2211,19 +2378,19 @@ def build_parser() -> argparse.ArgumentParser:
     record_submission.add_argument("problem", help="initialized problem directory")
     record_submission.add_argument("--candidate", required=True, help="local candidate id")
     record_submission.add_argument(
-        "--submission-id", required=True, help="canonical Conjectures result UUID"
+        "--submission-id", required=True, help="canonical provider submission identifier"
     )
     record_submission.add_argument(
         "--receipt",
         required=True,
         metavar="sha256:HEX",
-        help="digest of the canonical Conjectures result page (URL=sha256:HEX also accepted)",
+        help="digest of the canonical provider result (URL=sha256:HEX also accepted)",
     )
     record_submission.add_argument(
         "--submitted-at", help="official ISO-8601 UTC submission time; defaults to now"
     )
     record_submission.add_argument(
-        "--public-result-url", help="canonical Conjectures result URL; derived by default"
+        "--public-result-url", help="canonical provider result URL; derived by default"
     )
     record_submission.add_argument("--json", action="store_true", help="emit compact JSON")
     record_submission.set_defaults(handler=_maintainer_record_submission)
@@ -2237,7 +2404,7 @@ def build_parser() -> argparse.ArgumentParser:
     feedback.add_argument(
         "--decision",
         required=True,
-        help=("VERIFIED/REJECTED, APPROVED/REJECTED/PARTIAL_AWARD, or ELIGIBLE/INELIGIBLE"),
+        help="decision label declared by the problem's immutable provider contract",
     )
     feedback.add_argument("--reason-code", required=True, help="official reason code or label")
     feedback.add_argument("--summary", required=True, help="concise official feedback summary")
@@ -2248,10 +2415,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--report",
         required=True,
         metavar="sha256:HEX",
-        help="digest of the canonical Conjectures result page (URL=sha256:HEX also accepted)",
+        help="digest of the canonical provider result (URL=sha256:HEX also accepted)",
     )
     feedback.add_argument(
-        "--public-result-url", help="canonical Conjectures result URL; derived by default"
+        "--public-result-url", help="canonical provider result URL; derived by default"
     )
     feedback.add_argument("--json", action="store_true", help="emit compact JSON")
     feedback.set_defaults(handler=_maintainer_feedback)
@@ -2267,6 +2434,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize.add_argument("--json", action="store_true", help="emit compact JSON")
     finalize.set_defaults(handler=_maintainer_finalize)
+
+    sync_provider = maintainer_commands.add_parser(
+        "sync-provider",
+        help="read public provider status and record newly reached decisions",
+    )
+    sync_provider.add_argument("problem", help="initialized problem directory")
+    sync_provider.add_argument("--candidate", required=True, help="submitted local candidate id")
+    sync_provider.add_argument(
+        "--provider-timeout",
+        type=float,
+        default=10.0,
+        help="seconds per public provider request",
+    )
+    sync_provider.add_argument(
+        "--provider-max-pages",
+        type=int,
+        default=3,
+        help="maximum 100-row public feed pages to scan",
+    )
+    sync_provider.add_argument("--json", action="store_true", help="emit compact JSON")
+    sync_provider.set_defaults(handler=_maintainer_sync_provider)
 
     def advisor_arguments(command: argparse.ArgumentParser) -> None:
         command.add_argument("--model", choices=sorted(ALLOWED_MODELS), default="gpt-5.6-sol")

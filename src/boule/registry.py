@@ -26,6 +26,7 @@ from .canonical import canonical_bytes, digest_object
 from .crypto import load_public_key, public_key_text, sign_object, verify_object
 from .errors import ProtocolError
 from .model import CASE_ID_RE, parse_time
+from .provider_contract import provider_contract_digest, provider_contract_for_problem
 from .remote_protocol import canonical_clerk_url, strict_json_bytes
 from .repository_migration import REF_MANIFEST_SCHEMA, validate_ref_manifest
 
@@ -135,6 +136,10 @@ def _problem_summary(proposal: Any) -> tuple[str, dict[str, Any], str]:
         "formal_repository_pin": pin,
         "pinned_source_url": pinned_source,
     }
+    if "provider_contract" in problem:
+        public["provider_contract_digest"] = provider_contract_digest(
+            provider_contract_for_problem(problem)
+        )
     return case_id, public, commitment
 
 

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 from boule.canonical import digest_object
+from boule.cli import _sync_pending_provider_cases
 from boule.crypto import generate_private_key, public_key_text, sign_object
 from boule.errors import ProtocolError
+from boule.provider_observer import ProviderObservation
+from boule.provider_sync import sync_provider_candidate
 from boule.workspace import Workspace
 
 
@@ -178,6 +182,45 @@ def feedback_payload(stage, decision, candidate_id="candidate-1", submission_id=
         }[stage],
         "report": {"ref": result_url, "sha256": "sha256:" + "4" * 64},
     }
+
+
+class StaticProviderObserver:
+    provider_id = "conjectures.io"
+
+    def __init__(self, observation: ProviderObservation):
+        self.observation = observation
+        self.calls = 0
+
+    def observe(self, contract, submission_id, task_id):
+        self.calls += 1
+        assert contract["provider_id"] == self.provider_id
+        assert submission_id == SUBMISSION_ID
+        assert task_id == "task-1"
+        return self.observation
+
+
+def provider_observation(
+    *,
+    verification="VERIFIED",
+    review="UNREVIEWED",
+    reward="INELIGIBLE",
+    reason=None,
+    summary=None,
+):
+    return ProviderObservation(
+        provider_id="conjectures.io",
+        submission_id=SUBMISSION_ID,
+        task_id="task-1",
+        public_result_url=f"https://conjectures.io/results/{SUBMISSION_ID}",
+        evidence_sha256="sha256:" + "8" * 64,
+        evidence_source_url="https://conjectures.io/v1/results/submissions?limit=100",
+        verification_status=verification,
+        review_status=review,
+        settlement_status=reward,
+        failure_reason=reason if verification == "REJECTED" else None,
+        review_reason_code=reason if review != "UNREVIEWED" else None,
+        review_summary=summary if review != "UNREVIEWED" else None,
+    )
 
 
 def resolution_payload(review_event_id, candidate_id="candidate-1", submission_id=SUBMISSION_ID):
@@ -394,6 +437,8 @@ def test_candidate_submission_verification_review_and_reward_are_separate(tmp_pa
     candidate_event = w.append("submission_candidate_published", candidate_payload(), session)
     state = w.state("2030-01-01T00:00:03Z")
     assert state["problem_status"] == "CANDIDATE_READY"
+    assert state["provider_resolution"]["status"] == "OPEN"
+    assert state["provider_resolution"]["research_open"] is True
     assert state["candidates"][0]["submission"] is None
     assert state["candidates"][0]["reward"] is None
 
@@ -406,6 +451,12 @@ def test_candidate_submission_verification_review_and_reward_are_separate(tmp_pa
     w.append_maintainer("external_submission_receipted", submission_payload(), maintainer)
     state = w.state("2030-01-01T00:00:05Z")
     assert state["problem_status"] == "VERIFICATION_PENDING"
+    assert state["provider_resolution"]["status"] == "PENDING_VERIFICATION"
+    assert state["provider_resolution"]["native_status"] == {
+        "manual_review_status": "UNREVIEWED",
+        "reward_status": "INELIGIBLE",
+        "verification_status": "UNVERIFIED",
+    }
     assert state["candidates"][0]["verifier"] is None
     claim(w, session, "2030-01-01T00:00:06Z", "c-during-review")
     set_time(w, "2030-01-01T00:00:06.500000Z")
@@ -427,6 +478,8 @@ def test_candidate_submission_verification_review_and_reward_are_separate(tmp_pa
     )
     state = w.state("2030-01-01T00:00:07Z")
     assert state["problem_status"] == "REVIEW_PENDING"
+    assert state["provider_resolution"]["status"] == "PENDING_VERIFICATION"
+    assert state["provider_resolution"]["native_status"]["verification_status"] == "VERIFIED"
     assert state["candidates"][0]["review"] is None
     assert state["candidates"][0]["reward"] is None
 
@@ -436,6 +489,7 @@ def test_candidate_submission_verification_review_and_reward_are_separate(tmp_pa
     )
     state = w.state("2030-01-01T00:00:08Z")
     assert state["problem_status"] == "ACCEPTANCE_RECORDED"
+    assert state["provider_resolution"]["status"] == "PENDING_VERIFICATION"
     assert state["research_resume"]["action"] == "AWAIT_TRUSTED_CLERK_FINALIZATION"
     assert state["candidates"][0]["reward"] is None
 
@@ -464,6 +518,13 @@ def test_candidate_submission_verification_review_and_reward_are_separate(tmp_pa
     )
     state = w.state("2030-01-01T00:00:09Z")
     assert state["problem_status"] == "SOLVED"
+    assert state["provider_resolution"]["status"] == "SOLVED"
+    assert state["provider_resolution"]["terminal"] is True
+    assert state["provider_resolution"]["bounty"] == {
+        "managed_by_boule": False,
+        "native_status": "INELIGIBLE",
+        "status": "NOT_MANAGED",
+    }
     assert state["research_resume"]["action"] == "STOP_RESEARCH_PRESERVE_EVIDENCE"
     assert state["external_status_trust"]["authenticated_external_attestation"] is False
     with pytest.raises(ProtocolError, match="not open"):
@@ -504,6 +565,10 @@ def test_rejection_feedback_reopens_research_and_exact_retry_is_idempotent(tmp_p
 
     state = w.state("2030-01-01T00:00:07Z")
     assert state["problem_status"] == "OPEN_AFTER_FEEDBACK"
+    assert state["provider_resolution"]["status"] == "FAILED"
+    assert state["provider_resolution"]["research_open"] is True
+    assert state["provider_resolution"]["terminal"] is False
+    assert state["provider_resolution"]["feedback"][-1]["decision"] == "REJECTED"
     assert state["research_resume"]["action"] == "CONTINUE_RESEARCH_FROM_FEEDBACK"
     assert state["research_resume"]["feedback"]["decision"] == "REJECTED"
     claim(w, session, "2030-01-01T00:00:08Z", "c-revision")
@@ -600,3 +665,192 @@ def test_partial_award_records_feedback_and_keeps_research_open(tmp_path):
         "candidate_feedback_recorded", feedback_payload("reward", "ELIGIBLE"), maintainer
     )
     assert w.state("2030-01-01T00:00:08Z")["problem_status"] == "OPEN_AFTER_FEEDBACK"
+
+
+def _submitted_workspace(tmp_path):
+    w, maintainer, _, session, _, _ = kit(tmp_path)
+    claim(w, session)
+    advance(w, session)
+    set_time(w, "2030-01-01T00:00:03Z")
+    w.append("submission_candidate_published", candidate_payload(), session)
+    set_time(w, "2030-01-01T00:00:05Z")
+    w.append_maintainer("external_submission_receipted", submission_payload(), maintainer)
+    set_time(w, "2030-01-01T00:00:06Z")
+    return w, maintainer
+
+
+def test_provider_sync_records_approved_review_and_resolution_without_bounty_action(tmp_path):
+    w, maintainer = _submitted_workspace(tmp_path)
+    observer = StaticProviderObserver(
+        provider_observation(
+            review="APPROVED",
+            reward="ELIGIBLE",
+            reason="VALID_PROOF",
+            summary="The pinned Lean artifact passed review.",
+        )
+    )
+    result = sync_provider_candidate(
+        w,
+        "candidate-1",
+        maintainer,
+        observer=observer,
+        now=lambda: "2030-01-01T00:00:06Z",
+    )
+
+    assert result["events_appended"] == [
+        "candidate_feedback_recorded",
+        "candidate_feedback_recorded",
+        "case_resolution_recorded",
+    ]
+    assert result["problem_status"] == "SOLVED"
+    assert result["provider_resolution"]["status"] == "SOLVED"
+    assert result["observed"]["reward_status"] == "ELIGIBLE"
+    assert result["bounty_action_performed"] is False
+    state = w.state("2030-01-01T00:00:06Z")
+    assert state["candidates"][0]["reward"] is None
+    assert state["feedback"][-1]["reason_code"] == "VALID_PROOF"
+    assert state["feedback"][-1]["report"]["ref"].startswith(
+        "https://conjectures.io/v1/results/submissions"
+    )
+
+    event_count = len(w._events())
+    replay = sync_provider_candidate(
+        w,
+        "candidate-1",
+        maintainer,
+        observer=observer,
+        now=lambda: "2030-01-01T00:00:06Z",
+    )
+    assert replay["events_appended"] == []
+    assert len(w._events()) == event_count
+    assert observer.calls == 2
+
+
+def test_provider_sync_retains_reviewer_rejection_and_reopens_research(tmp_path):
+    w, maintainer = _submitted_workspace(tmp_path)
+    result = sync_provider_candidate(
+        w,
+        "candidate-1",
+        maintainer,
+        observer=StaticProviderObserver(
+            provider_observation(
+                review="REJECTED",
+                reason="MISSING_CASE",
+                summary="One required case is not covered.",
+            )
+        ),
+        now=lambda: "2030-01-01T00:00:06Z",
+    )
+
+    assert result["events_appended"] == [
+        "candidate_feedback_recorded",
+        "candidate_feedback_recorded",
+    ]
+    assert result["provider_resolution"]["status"] == "FAILED"
+    assert result["provider_resolution"]["research_open"] is True
+    assert result["provider_resolution"]["feedback"][-1]["summary"] == (
+        "One required case is not covered."
+    )
+
+
+def test_provider_sync_retains_public_verifier_failure(tmp_path):
+    w, maintainer = _submitted_workspace(tmp_path)
+    result = sync_provider_candidate(
+        w,
+        "candidate-1",
+        maintainer,
+        observer=StaticProviderObserver(
+            provider_observation(
+                verification="REJECTED",
+                reason="Lean compilation failed at the pinned task.",
+            )
+        ),
+        now=lambda: "2030-01-01T00:00:06Z",
+    )
+
+    assert result["events_appended"] == ["candidate_feedback_recorded"]
+    feedback = result["provider_resolution"]["feedback"][-1]
+    assert result["provider_resolution"]["status"] == "FAILED"
+    assert feedback["reason_code"] == "PROVIDER_REJECTED"
+    assert feedback["summary"] == "Lean compilation failed at the pinned task."
+
+
+def test_provider_sync_pending_state_is_read_only_and_identity_mismatch_fails(tmp_path):
+    w, maintainer = _submitted_workspace(tmp_path)
+    pending = sync_provider_candidate(
+        w,
+        "candidate-1",
+        maintainer,
+        observer=StaticProviderObserver(
+            provider_observation(verification="UNVERIFIED", review="UNREVIEWED")
+        ),
+        now=lambda: "2030-01-01T00:00:06Z",
+    )
+    assert pending["events_appended"] == []
+    assert pending["provider_resolution"]["status"] == "PENDING_VERIFICATION"
+
+    mismatch = provider_observation()
+    mismatch = ProviderObservation(**{**mismatch.__dict__, "task_id": "another-task"})
+    with pytest.raises(ProtocolError, match="does not match the submitted candidate"):
+        sync_provider_candidate(
+            w,
+            "candidate-1",
+            maintainer,
+            observer=StaticProviderObserver(mismatch),
+            now=lambda: "2030-01-01T00:00:06Z",
+        )
+
+
+def test_registry_maintainer_discovers_and_syncs_pending_cases(monkeypatch, tmp_path):
+    w, maintainer = _submitted_workspace(tmp_path)
+    observer = StaticProviderObserver(
+        provider_observation(
+            review="REJECTED",
+            reason="MISSING_CASE",
+            summary="One required case is not covered.",
+        )
+    )
+
+    class FakeRegistry:
+        @staticmethod
+        def problems(*, live_only):
+            assert live_only is True
+            return [{"case_id": "case-1"}]
+
+    class FakeHub:
+        registry = FakeRegistry()
+
+        @staticmethod
+        def case_workspace(case_id):
+            assert case_id == "case-1"
+            return w
+
+    monkeypatch.setattr("boule.cli._now", lambda: "2030-01-01T00:00:06Z")
+    monkeypatch.setattr("boule.cli.load_maintainer_key", lambda _workspace: maintainer)
+    monkeypatch.setattr("boule.cli.observer_for_provider", lambda *_args, **_kwargs: observer)
+
+    def fixed_sync(workspace, candidate_id, key, **kwargs):
+        return sync_provider_candidate(
+            workspace,
+            candidate_id,
+            key,
+            **kwargs,
+            now=lambda: "2030-01-01T00:00:06Z",
+        )
+
+    monkeypatch.setattr("boule.cli.sync_provider_candidate", fixed_sync)
+    errors = {}
+    results = _sync_pending_provider_cases(
+        FakeHub(),
+        SimpleNamespace(provider_sync=True, provider_timeout=4, provider_max_pages=2),
+        errors,
+    )
+
+    assert errors == {}
+    assert len(results) == 1
+    assert results[0]["case_id"] == "case-1"
+    assert results[0]["provider_resolution"]["status"] == "FAILED"
+    assert results[0]["events_appended"] == [
+        "candidate_feedback_recorded",
+        "candidate_feedback_recorded",
+    ]

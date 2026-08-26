@@ -100,6 +100,12 @@ without the credential overlay still fails closed when configuration is
 missing. Never run passive and automated maintainers from different Compose
 projects against the same volume.
 
+The maintainer's credential-free provider-status observer is enabled by
+default whenever that watcher runs. It only polls already recorded submissions
+and appends newly reached verifier/reviewer decisions; it neither submits nor
+pays. Add `--no-provider-sync` to the watcher command if deployment policy
+forbids outbound public reads, and record official feedback manually.
+
 ## 5. Production boundaries
 
 Each provisioned case is served by the shared API at

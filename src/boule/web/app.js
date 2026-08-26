@@ -402,8 +402,8 @@
 
   function statusClass(status) {
     var key = status.toLowerCase().replace(/[^a-z]+/g, "-");
-    var known = ["open", "active", "review", "submitted", "staging",
-      "closed", "solved", "final", "rejected", "blocked", "stale"];
+    var known = ["open", "active", "review", "submitted", "pending-verification", "staging",
+      "closed", "solved", "final", "failed", "rejected", "blocked", "stale"];
     return known.indexOf(key) >= 0 ? "status-label status-" + key : "status-label";
   }
 
@@ -706,6 +706,23 @@
           var staleMark = el("span", "stale-mark stale-block", "projection stale");
           staleMark.title = "The clerk projection for this case could not be refreshed; showing its last verified state.";
           cStatus.appendChild(staleMark);
+        }
+        var resolution = isObject(p.provider_resolution) ? p.provider_resolution : null;
+        var feedback = resolution && Array.isArray(resolution.feedback) ? resolution.feedback : [];
+        if (feedback.length) {
+          var latestFeedback = feedback[feedback.length - 1];
+          if (isObject(latestFeedback)) {
+            var decision = asString(latestFeedback.decision) || "provider feedback";
+            var summary = asString(latestFeedback.summary);
+            var feedbackNode = el(
+              "span",
+              "provider-feedback",
+              summary ? decision + " · " + truncate(summary, 80) : decision
+            );
+            var nextAction = asString(latestFeedback.next_action);
+            if (nextAction) feedbackNode.title = "Next: " + nextAction;
+            cStatus.appendChild(feedbackNode);
+          }
         }
       }
       else cStatus.appendChild(el("span", "unknown-mark", "—"));
@@ -1076,11 +1093,23 @@
     if (!isObject(value)) return "not published";
     var admission = value.automatic_admission;
     var provisioning = value.automatic_provisioning;
-    if (typeof admission !== "boolean" && typeof provisioning !== "boolean") {
+    var providerSync = value.provider_sync_enabled;
+    if (typeof admission !== "boolean" && typeof provisioning !== "boolean" &&
+        typeof providerSync !== "boolean") {
       return "not published";
     }
-    return "admission " + (admission === true ? "on" : admission === false ? "off" : "unknown") +
-      " · provisioning " + (provisioning === true ? "on" : provisioning === false ? "off" : "unknown");
+    var text = "admission " +
+      (admission === true ? "on" : admission === false ? "off" : "unknown") +
+      " · provisioning " +
+      (provisioning === true ? "on" : provisioning === false ? "off" : "unknown") +
+      " · provider feedback sync " +
+      (providerSync === true ? "on" : providerSync === false ? "off" : "unknown");
+    if (typeof value.provider_sync_observations === "number" &&
+        typeof value.provider_sync_events === "number") {
+      text += " (" + value.provider_sync_observations + " observed · " +
+        value.provider_sync_events + " signed events)";
+    }
+    return text;
   }
 
   function renderMaintainer(value) {

@@ -164,6 +164,9 @@ def test_one_api_hosts_isolated_case_ledgers(tmp_path) -> None:
             problem_id=alpha_problem["problem_id"],
             clerk_key=alpha.config["maintainer_key"],
         )
+        assert alpha_state["state"]["provider"]["id"] == "conjectures.io"
+        assert alpha_state["state"]["provider_resolution"]["status"] == "OPEN"
+        assert alpha_state["state"]["provider_resolution"]["bounty"]["managed_by_boule"] is False
         client_state = RemoteClient(alpha, origin + f"/cases/{alpha_id}").fetch_state()
         assert client_state["snapshot"]["event_count"] == 0
 

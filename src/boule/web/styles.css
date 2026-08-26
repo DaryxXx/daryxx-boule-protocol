@@ -560,9 +560,18 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   border: 1px solid var(--chalk-faint); color: var(--chalk-dim);
 }
 .status-open, .status-active, .status-staging { border-color: var(--green); color: var(--green); }
-.status-review, .status-submitted { border-color: var(--yellow); color: var(--yellow); }
+.status-review, .status-submitted, .status-pending-verification {
+  border-color: var(--yellow); color: var(--yellow);
+}
 .status-closed, .status-solved, .status-final { border-color: var(--blue); color: var(--blue); }
-.status-rejected, .status-blocked, .status-stale { border-color: var(--red); color: var(--red); }
+.status-failed, .status-rejected, .status-blocked, .status-stale {
+  border-color: var(--red); color: var(--red);
+}
+
+.provider-feedback {
+  display: block; margin-top: 0.35rem; max-width: 19rem;
+  color: var(--chalk-dim); font-size: 0.72rem; line-height: 1.4;
+}
 
 .trust-mark, .stale-mark {
   display: inline-block; margin-left: 0.5rem;
