@@ -11,11 +11,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from .errors import ProtocolError
+from .provider_contract import conjectures_provider_contract, validate_provider_contract
 from .version import USER_AGENT
 
 SCHEMA = "boule-problem/0.1"
@@ -97,6 +99,24 @@ class ImportResult:
     created: bool
     snapshot_created: bool
     manifest: dict[str, object]
+
+
+class ProblemDefinitionProvider(Protocol):
+    """Adapter that turns one provider URL into Boule's pinned problem manifest."""
+
+    provider_id: str
+
+    def handles(self, url: str) -> bool: ...
+
+    def canonicalize(self, url: str, mode: str | None) -> tuple[str, str, str]: ...
+
+    def validate_response(self, response: FetchResponse, expected_url: str, mode: str) -> None: ...
+
+    def parse(
+        self, body: bytes, source_url: str, mode: str
+    ) -> tuple[dict[str, object], dict[str, object]]: ...
+
+    def contract(self) -> dict[str, Any]: ...
 
 
 def canonical_problem_url(url: str, mode: str | None = None) -> tuple[str, str, str]:
@@ -313,6 +333,58 @@ def _validated_response(response: FetchResponse, expected_url: str, mode: str) -
         raise ProtocolError("problem fetch redirected to a different problem or mode")
 
 
+class ConjecturesProblemProvider:
+    provider_id = "conjectures.io"
+
+    @staticmethod
+    def handles(url: str) -> bool:
+        parts = urlsplit(url)
+        return parts.scheme == "https" and parts.hostname == "conjectures.io"
+
+    @staticmethod
+    def canonicalize(url: str, mode: str | None) -> tuple[str, str, str]:
+        return canonical_problem_url(url, mode)
+
+    @staticmethod
+    def validate_response(response: FetchResponse, expected_url: str, mode: str) -> None:
+        _validated_response(response, expected_url, mode)
+
+    @staticmethod
+    def parse(
+        body: bytes, source_url: str, mode: str
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        return parse_problem_html(body, source_url, mode)
+
+    @staticmethod
+    def contract() -> dict[str, Any]:
+        return conjectures_provider_contract()
+
+
+BUILTIN_PROBLEM_PROVIDERS: tuple[ProblemDefinitionProvider, ...] = (ConjecturesProblemProvider(),)
+
+
+def resolve_problem_provider(
+    url: str, provider: ProblemDefinitionProvider | None = None
+) -> ProblemDefinitionProvider:
+    if provider is not None:
+        if not provider.handles(url):
+            raise ProtocolError("selected problem provider does not accept this URL")
+        return provider
+    matches = [candidate for candidate in BUILTIN_PROBLEM_PROVIDERS if candidate.handles(url)]
+    if len(matches) != 1:
+        raise ProtocolError("no unique Boule problem provider accepts this URL")
+    return matches[0]
+
+
+def canonicalize_problem_url(
+    url: str,
+    mode: str | None = None,
+    *,
+    provider: ProblemDefinitionProvider | None = None,
+) -> tuple[str, str, str]:
+    return resolve_problem_provider(url, provider).canonicalize(url, mode)
+
+
 def _write_json(path: Path, value: dict[str, object]) -> None:
     with path.open("x", encoding="utf-8", newline="\n") as handle:
         json.dump(value, handle, indent=2, sort_keys=True, ensure_ascii=False)
@@ -339,11 +411,20 @@ def import_problem(
     refresh_snapshot: bool = False,
     fetcher: Callable[[str], FetchResponse] = fetch_problem,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    provider: ProblemDefinitionProvider | None = None,
 ) -> ImportResult:
-    canonical_url, selected_mode, source_slug = canonical_problem_url(url, mode)
+    selected_provider = resolve_problem_provider(url, provider)
+    canonical_url, selected_mode, source_slug = selected_provider.canonicalize(url, mode)
     response = fetcher(canonical_url)
-    _validated_response(response, canonical_url, selected_mode)
-    manifest, snapshot = parse_problem_html(response.body, canonical_url, selected_mode)
+    selected_provider.validate_response(response, canonical_url, selected_mode)
+    manifest, snapshot = selected_provider.parse(response.body, canonical_url, selected_mode)
+    contract = validate_provider_contract(selected_provider.contract())
+    source = manifest.get("source")
+    if not isinstance(source, dict) or source.get("provider") != selected_provider.provider_id:
+        raise ProtocolError("problem manifest source does not match its provider adapter")
+    if contract["provider_id"] != selected_provider.provider_id:
+        raise ProtocolError("problem provider adapter and contract identities differ")
+    manifest["provider_contract"] = contract
     snapshot["fetched_at"] = now().astimezone(UTC).isoformat().replace("+00:00", "Z")
     snapshot["final_url"] = response.final_url
     snapshot["http_status"] = response.status
@@ -357,7 +438,9 @@ def import_problem(
         existing = _load_manifest(existing_path)
         existing_task = existing.get("task")
         if isinstance(existing_task, dict) and existing_task.get("task_commitment") == commitment:
-            if existing != manifest:
+            legacy_manifest = dict(manifest)
+            legacy_manifest.pop("provider_contract", None)
+            if existing != manifest and existing != legacy_manifest:
                 raise ProtocolError(
                     "task commitment already exists with conflicting immutable data"
                 )

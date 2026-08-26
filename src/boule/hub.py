@@ -16,10 +16,11 @@ from .errors import ProtocolError
 from .problem_import import (
     FetchResponse,
     ImportResult,
-    canonical_problem_url,
+    canonicalize_problem_url,
     fetch_problem,
     import_problem,
 )
+from .provider_contract import provider_contract_digest, provider_contract_for_problem
 from .provisioner import CaseProvisioner, ProvisionResult, Repository, RepositoryProvider
 from .registry import Registry
 from .registry_api import fetch_case_state
@@ -203,6 +204,11 @@ class Hub:
                 "formal_repository_pin": task["formal_repository_pin"],
                 "pinned_source_url": task["pinned_source_url"],
             }
+            if record.get("provider_contract_digest") is not None:
+                actual["provider_contract_digest"] = provider_contract_digest(
+                    provider_contract_for_problem(manifest)
+                )
+                expected["provider_contract_digest"] = record["provider_contract_digest"]
             if actual != expected:
                 raise ProtocolError("reimported source no longer matches the proposed task")
             return ImportResult(
@@ -220,7 +226,7 @@ class Hub:
             details = problem["problem"]
             if not all(isinstance(value, dict) for value in (source, task, details)):
                 raise TypeError
-            return {
+            projection = {
                 "problem_id": problem["problem_id"],
                 "title": details["title"],
                 "source_name": source["provider"],
@@ -231,12 +237,17 @@ class Hub:
                 "formal_repository_pin": task["formal_repository_pin"],
                 "pinned_source_url": task["pinned_source_url"],
             }
+            if "provider_contract" in problem:
+                projection["provider_contract_digest"] = provider_contract_digest(
+                    provider_contract_for_problem(problem)
+                )
+            return projection
         except (KeyError, TypeError) as exc:
             raise ProtocolError("case workspace has an incomplete imported problem") from exc
 
     @staticmethod
     def _record_projection(record: Mapping[str, Any]) -> dict[str, Any]:
-        return {
+        projection = {
             "problem_id": record["problem_id"],
             "title": record["title"],
             "source_name": record["source_name"],
@@ -247,13 +258,16 @@ class Hub:
             "formal_repository_pin": record["formal_repository_pin"],
             "pinned_source_url": record["pinned_source_url"],
         }
+        if record.get("provider_contract_digest") is not None:
+            projection["provider_contract_digest"] = record["provider_contract_digest"]
+        return projection
 
     def _canonical_workspace_path(self, record: Mapping[str, Any]) -> Path:
         source_url = record["source_url"]
         task_mode = record["task_mode"]
         if not isinstance(source_url, str) or not isinstance(task_mode, str):
             raise ProtocolError("registry case source identity is invalid")
-        canonical_url, selected_mode, source_slug = canonical_problem_url(source_url, task_mode)
+        canonical_url, selected_mode, source_slug = canonicalize_problem_url(source_url, task_mode)
         if canonical_url != source_url or selected_mode != task_mode:
             raise ProtocolError("registry case source identity is not canonical")
         directory = (
@@ -389,7 +403,10 @@ class Hub:
     def case_workspace(self, case_id: str) -> Workspace:
         record = self.registry.problem(case_id)
         workspace = Workspace(self._canonical_workspace_path(record))
-        if self._problem_projection(workspace.problem) != self._record_projection(record):
+        problem_projection = self._problem_projection(workspace.problem)
+        if record.get("provider_contract_digest") is None:
+            problem_projection.pop("provider_contract_digest", None)
+        if problem_projection != self._record_projection(record):
             raise ProtocolError("case workspace problem does not match the registry")
         repository_id = record["marker_repository_id"]
         repository_node_id = record["marker_repository_node_id"]

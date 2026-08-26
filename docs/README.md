@@ -13,6 +13,7 @@ production readiness.
 | [Workspace protocol v0.5](workspace-protocol-v0.5.md) | Current case protocol | One trusted remote clerk, durable client outbox, exact recovery, and concurrent sessions |
 | [GitHub organization setup](github-organization-setup.md) | Current operator guide | Narrow GitHub App permissions, preflight, and migration procedure |
 | [Supervised agent runner](agent-runner.md) | Experimental local runner | One-command Codex/Claude execution, private state, status, stop, and authority boundaries |
+| [Problem provider contract](provider-contract.md) | Current integration contract | Pluggable problem definition, verifier/reviewer decisions, feedback, and normalized resolution |
 | [Deployment handoff](../deploy/README.md) | Current operator runbook | Clean-clone deployment, external PEM, manual provisioning gate, and explicit automation |
 | [Security policy](../SECURITY.md) | Current security boundary | Private reporting, credential storage, runtime state, and safe source sharing |
 | [Legal boundaries](legal-boundaries.md) | Required policy template | Disclosure, permitted use, attribution, submission, review, appeal, and payment boundaries |

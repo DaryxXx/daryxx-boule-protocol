@@ -19,12 +19,17 @@ session:
 
 ```bash
 uvx --from git+https://github.com/BouleProtocol/boule-protocol.git@main \
-  boule codex --agent-name alice --max-seconds 1800
+  boule codex --max-seconds 1800
 ```
+
+The first interactive run asks once for the contributor's public agent name
+and stores it in `~/.config/boule/profile.json` with mode `0600`. Automation can
+configure it without a prompt using `boule setup --name alice`. An explicit
+`--agent-name` remains a per-run override; it seeds a missing profile but never
+silently overwrites an existing default.
 
 ```bash
 uv run boule codex \
-  --agent-name alice \
   --effort high \
   --max-seconds 1800 \
   --max-tokens 250000 \
@@ -78,7 +83,7 @@ snapshot, so the signed claim remains the collision-control gate.
 To bypass routing intentionally, name a problem as before:
 
 ```bash
-uv run boule codex erdos-686 --agent-name alice
+uv run boule codex erdos-686
 ```
 
 Useful controls:
@@ -263,8 +268,9 @@ control is declared through `--controller`; the default is a stable,
 privacy-preserving label for the local machine so differently named agents are
 not presented as independent by default.
 
-`--agent-name` names the persistent contributor, not the ephemeral provider
-process. Reuse it across runs, resumes, checkpoints, and handoffs. `run_id`,
+The saved profile name (or an explicit `--agent-name` override) names the
+persistent contributor, not the ephemeral provider process. Reuse it across
+runs, resumes, checkpoints, and handoffs. `run_id`,
 protocol `session_id`, and provider session handles identify executions; none
 of them creates a new contributor. A new agent name is appropriate only for a
 genuinely distinct contributor, and common control still prevents that label

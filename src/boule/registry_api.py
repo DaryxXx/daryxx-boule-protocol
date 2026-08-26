@@ -70,6 +70,9 @@ def maintainer_runtime_status(
         "cycle": None,
         "automatic_admission": None,
         "automatic_provisioning": None,
+        "provider_sync_enabled": None,
+        "provider_sync_observations": None,
+        "provider_sync_events": None,
         "error_case_count": None,
     }
     if path is None:
@@ -115,6 +118,16 @@ def maintainer_runtime_status(
     automatic_provisioning = value.get("automatic_provisioning")
     if not isinstance(automatic_provisioning, bool):
         automatic_provisioning = None
+    provider_sync_enabled = value.get("provider_sync_enabled")
+    if not isinstance(provider_sync_enabled, bool):
+        provider_sync_enabled = None
+
+    def bounded_count(name: str) -> int | None:
+        count = value.get(name)
+        if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 10_000_000:
+            return None
+        return count
+
     return {
         **base,
         "status": "running" if age <= fresh_for else "stale",
@@ -124,6 +137,9 @@ def maintainer_runtime_status(
         "cycle": cycle,
         "automatic_admission": automatic_admission,
         "automatic_provisioning": automatic_provisioning,
+        "provider_sync_enabled": provider_sync_enabled,
+        "provider_sync_observations": bounded_count("provider_sync_observations"),
+        "provider_sync_events": bounded_count("provider_sync_events"),
         "error_case_count": error_count,
     }
 
@@ -446,10 +462,23 @@ def project_case(record: dict[str, Any], bundle: dict[str, Any]) -> dict[str, An
             "mode": "unknown",
             "authenticated_external_attestation": False,
         }
+    provider_resolution = state.get("provider_resolution")
+    if not isinstance(provider_resolution, dict) or provider_resolution.get("status") not in {
+        "OPEN",
+        "PENDING_VERIFICATION",
+        "SOLVED",
+        "FAILED",
+    }:
+        provider_resolution = None
+    detailed_status = state.get("problem_status", record["status"])
     return {
         **record,
         "registry_status": record["status"],
-        "status": state.get("problem_status", record["status"]),
+        "status": (
+            provider_resolution["status"] if provider_resolution is not None else detailed_status
+        ),
+        "detailed_status": detailed_status,
+        "provider_resolution": provider_resolution,
         "active_agents": active_agents,
         "agents_on_record": _agents_on_record(state),
         "active_claims": active_claims,
@@ -515,6 +544,7 @@ class LiveProjector:
             "agents_on_record": [],
             "active_claims": [],
             "recent_activity": [],
+            "provider_resolution": None,
             "external_status_trust": {
                 "mode": "unknown",
                 "authenticated_external_attestation": False,

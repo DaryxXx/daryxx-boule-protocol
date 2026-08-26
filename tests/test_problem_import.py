@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 
 from boule.errors import ProtocolError
 from boule.problem_import import FetchResponse, canonical_problem_url, import_problem
+from boule.provider_contract import conjectures_provider_contract
 
 FIXTURES = Path(__file__).parent / "fixtures" / "conjectures"
 BASE = "https://conjectures.io/problems/erdos686-erdos-686-variants-four"
@@ -34,6 +36,13 @@ def test_imports_current_formalized_task_and_is_idempotent(tmp_path: Path) -> No
         "sha256:bd2f52489d971db4ae4a8c79e106c7fd3080827a8d4dc72f3154e395da098528"
     )
     assert manifest["task"]["formal_repository_pin"] == ("379fc0298dc146df549e7061c3ede0353a5bb51f")
+    contract = manifest["provider_contract"]
+    assert contract["provider_id"] == "conjectures.io"
+    assert contract["stages"]["verifier"]["native_field"] == "verification_status"
+    assert contract["stages"]["review"]["native_field"] == "manual_review_status"
+    assert contract["settlement"]["native_field"] == "reward_status"
+    assert contract["settlement"]["managed_by_boule"] is False
+    assert "PARTIAL_AWARD" not in contract["stages"]["review"]["failure"]
     assert len(list((first.path / "snapshots").iterdir())) == 1
 
 
@@ -82,6 +91,83 @@ def test_imports_current_counterexample_as_separate_task(tmp_path: Path) -> None
     assert task["task_commitment"] == (
         "sha256:2c9ab16bc1a6745054b6411054da9c2e886da7051ec89c4383a1604451e1e2a7"
     )
+
+
+def test_another_problem_provider_can_supply_definition_and_contract(tmp_path: Path) -> None:
+    class ExampleProvider:
+        provider_id = "problems.example"
+
+        @staticmethod
+        def handles(url: str) -> bool:
+            return url.startswith("https://problems.example/p/")
+
+        @staticmethod
+        def canonicalize(url: str, mode: str | None) -> tuple[str, str, str]:
+            assert mode in {None, "formalized"}
+            return "https://problems.example/p/sample", "formalized", "sample"
+
+        @staticmethod
+        def validate_response(response, expected_url: str, mode: str) -> None:
+            assert response.status == 200
+            assert response.final_url == expected_url
+            assert mode == "formalized"
+
+        @staticmethod
+        def parse(body: bytes, source_url: str, mode: str):
+            assert body == b"pinned definition"
+            manifest = {
+                "schema": "boule-problem/0.1",
+                "problem_id": "example:sample-v1",
+                "slug": "sample",
+                "source": {
+                    "provider": "problems.example",
+                    "canonical_problem_url": source_url,
+                },
+                "problem": {"title": "Example problem"},
+                "task": {
+                    "mode": mode,
+                    "task_id": "example-sample-formalized-v1",
+                    "task_commitment": "sha256:" + "a" * 64,
+                    "formal_repository_pin": "b" * 40,
+                },
+            }
+            snapshot = {
+                "schema": "boule-problem-snapshot/0.1",
+                "source_url": source_url,
+                "page_sha256": "sha256:" + "c" * 64,
+                "task_commitment": "sha256:" + "a" * 64,
+            }
+            return manifest, snapshot
+
+        @staticmethod
+        def contract():
+            contract = deepcopy(conjectures_provider_contract())
+            contract["provider_id"] = "problems.example"
+            contract["display_name"] = "Example Problems"
+            contract["definition"]["adapter"] = "example-json-v1"
+            contract["submission"] = {
+                "id_format": "safe-id",
+                "public_result_url_template": ("https://problems.example/results/{submission_id}"),
+                "receipt_source": "trusted-clerk/problems.example-submission",
+            }
+            contract["stages"]["verifier"]["source"] = "trusted-clerk/problems.example-verifier"
+            contract["stages"]["review"]["source"] = "trusted-clerk/problems.example-review"
+            contract["resolution"]["source"] = "trusted-clerk/problems.example-review"
+            contract["settlement"]["source"] = "trusted-clerk/problems.example-settlement"
+            return contract
+
+    url = "https://problems.example/p/sample"
+    imported = import_problem(
+        url,
+        tmp_path,
+        provider=ExampleProvider(),
+        fetcher=lambda _: FetchResponse(b"pinned definition", url, content_type="application/json"),
+        now=lambda: NOW,
+    )
+
+    assert imported.manifest["source"]["provider"] == "problems.example"
+    assert imported.manifest["provider_contract"]["provider_id"] == "problems.example"
+    assert imported.manifest["provider_contract"]["submission"]["id_format"] == "safe-id"
 
 
 def test_dynamic_page_change_does_not_change_identity(tmp_path: Path) -> None:

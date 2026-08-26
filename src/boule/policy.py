@@ -7,6 +7,7 @@ from typing import Any
 
 from .canonical import digest_object
 from .errors import ProtocolError
+from .provider_contract import provider_contract_digest, provider_contract_for_problem
 from .remote_protocol import strict_json_bytes
 
 POLICY_SCHEMA = "boule-case-policy/0.1"
@@ -22,7 +23,7 @@ def build_case_policy(problem: dict[str, Any], disclosure: str) -> dict[str, Any
         base_revision = problem["task"]["formal_repository_pin"]
     except (KeyError, TypeError) as exc:
         raise ProtocolError("problem manifest cannot anchor a case policy") from exc
-    return {
+    policy = {
         "schema": POLICY_SCHEMA,
         "problem_id": problem_id,
         "task_commitment": task_commitment,
@@ -36,6 +37,11 @@ def build_case_policy(problem: dict[str, Any], disclosure: str) -> dict[str, Any
         "settlement": "manual_after_appeal",
         "legal_status": "protocol_notice_requires_external_legal_terms",
     }
+    if "provider_contract" in problem:
+        policy["provider_contract_digest"] = provider_contract_digest(
+            provider_contract_for_problem(problem)
+        )
+    return policy
 
 
 def validate_case_policy(policy: Any, problem: dict[str, Any]) -> dict[str, Any]:

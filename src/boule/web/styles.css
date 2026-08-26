@@ -89,7 +89,7 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
 }
 .brand-attribution {
   font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.04em;
-  color: var(--chalk-faint); text-decoration: none;
+  color: var(--chalk); text-decoration: none;
 }
 .brand-attribution:hover { color: var(--blue); }
 
@@ -256,20 +256,37 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
 }
 .button-quiet:hover { color: var(--chalk); border-color: var(--chalk-faint); }
 
-.copy-line {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem;
-  max-width: 100%;
+.hero-commands { display: grid; gap: 0.65rem; max-width: 48rem; }
+.command-option {
+  padding: 0.75rem; background: color-mix(in srgb, var(--board-deep) 72%, transparent);
+  border: 1px solid var(--panel-edge); border-radius: 6px;
 }
-.hero-start-line { margin-top: 0.55rem; }
+.command-option-primary { border-color: color-mix(in srgb, var(--yellow) 45%, var(--panel-edge)); }
+.command-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.45rem; }
+.command-head p {
+  display: flex; align-items: center; gap: 0.5rem; margin: 0;
+  color: var(--chalk); font-size: 0.82rem; font-weight: 600;
+}
+.command-step {
+  display: inline-grid; place-items: center; width: 1.35rem; height: 1.35rem;
+  border-radius: 50%; background: var(--panel); color: var(--yellow);
+  font-family: var(--font-mono); font-size: 0.68rem;
+}
+.command-note {
+  color: var(--chalk-faint); font-family: var(--font-mono); font-size: 0.65rem;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.command-option-primary .command-note { color: var(--yellow); }
+.copy-line { display: flex; align-items: stretch; gap: 0.5rem; max-width: 100%; }
 .copy-line code {
   font-size: 0.78rem; color: var(--chalk-dim);
-  background: var(--board-deep); border: 1px solid var(--panel-edge);
+  background: var(--board-deep); border: 0;
   border-radius: 3px; padding: 0.5rem 0.7rem;
   overflow-x: auto; white-space: nowrap; max-width: 100%; min-width: 0;
   flex: 1 1 20rem;
 }
 .copy-button {
-  background: transparent; color: var(--blue);
+  flex: none; background: var(--panel); color: var(--blue);
   border: 1px solid var(--panel-edge); padding: 0.35rem 0.8rem; font-weight: 500;
 }
 .copy-button:hover { border-color: var(--blue); }
@@ -560,9 +577,18 @@ a:hover { color: var(--chalk); text-decoration-color: var(--yellow); }
   border: 1px solid var(--chalk-faint); color: var(--chalk-dim);
 }
 .status-open, .status-active, .status-staging { border-color: var(--green); color: var(--green); }
-.status-review, .status-submitted { border-color: var(--yellow); color: var(--yellow); }
+.status-review, .status-submitted, .status-pending-verification {
+  border-color: var(--yellow); color: var(--yellow);
+}
 .status-closed, .status-solved, .status-final { border-color: var(--blue); color: var(--blue); }
-.status-rejected, .status-blocked, .status-stale { border-color: var(--red); color: var(--red); }
+.status-failed, .status-rejected, .status-blocked, .status-stale {
+  border-color: var(--red); color: var(--red);
+}
+
+.provider-feedback {
+  display: block; margin-top: 0.35rem; max-width: 19rem;
+  color: var(--chalk-dim); font-size: 0.72rem; line-height: 1.4;
+}
 
 .trust-mark, .stale-mark {
   display: inline-block; margin-left: 0.5rem;

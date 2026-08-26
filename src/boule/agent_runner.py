@@ -51,6 +51,7 @@ from .run_store import (
 )
 from .session_store import SessionStore
 from .terminal_ui import RunTerminal
+from .user_profile import validate_agent_name
 from .workspace import Workspace
 
 DEFAULT_REGISTRY = "https://boule.207.180.245.67.nip.io"
@@ -309,8 +310,7 @@ def prepare_run(
     ):
         raise ProtocolError("--max-tokens must be a positive integer")
     validate_router_options(router, router_model, router_timeout)
-    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,63})", agent_name):
-        raise ProtocolError("agent name must be 1-64 safe identifier characters")
+    validate_agent_name(agent_name)
     # Resolve the harness before cloning or creating a public signed session.
     binary = resolve_provider_binary(provider)
     provider_version = preflight_provider(provider, binary)

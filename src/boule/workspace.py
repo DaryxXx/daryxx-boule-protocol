@@ -7,17 +7,25 @@ import json
 import os
 import tempfile
 import threading
-import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .canonical import canonical_bytes, digest_object
 from .crypto import load_public_key, public_key_text, sign_object, verify_object
 from .errors import ProtocolError, RequestConflictError, StaleHeadError
 from .policy import build_case_policy, load_case_policy, policy_digest, validate_case_policy
+from .provider_contract import (
+    decision_outcome,
+    provider_contract_for_problem,
+    provider_resolution,
+    result_url,
+    stage_contract,
+    validate_submission_id,
+)
 from .remote_protocol import (
     ENVELOPE_SCHEMA,
     EVENT_SCHEMA,
@@ -56,9 +64,6 @@ IDEMPOTENT_EVENTS = {
     "case_resolution_recorded",
 }
 
-VERIFIER_DECISIONS = frozenset({"VERIFIED", "REJECTED"})
-REVIEW_DECISIONS = frozenset({"APPROVED", "REJECTED", "PARTIAL_AWARD"})
-REWARD_DECISIONS = frozenset({"ELIGIBLE", "INELIGIBLE"})
 MAX_SESSION_LIFETIME = timedelta(hours=168)
 
 LEGACY_EVENT_FIELDS = {
@@ -120,18 +125,6 @@ def _sha256(value: Any, name: str) -> str:
     return value
 
 
-def _uuid(value: Any, name: str) -> str:
-    if not isinstance(value, str):
-        raise ProtocolError(f"{name} must be a canonical UUID")
-    try:
-        parsed = uuid.UUID(value)
-    except (ValueError, AttributeError) as exc:
-        raise ProtocolError(f"{name} must be a canonical UUID") from exc
-    if str(parsed) != value:
-        raise ProtocolError(f"{name} must be a canonical UUID")
-    return value
-
-
 class Workspace:
     def __init__(
         self, problem_dir: str | Path, *, clock: Callable[[], datetime] | None = None
@@ -155,6 +148,7 @@ class Workspace:
         except (OSError, ProtocolError) as exc:
             raise ProtocolError("workspace JSON is invalid") from exc
         self.policy = load_case_policy(self.policy_path, self.problem)
+        self.provider_contract = provider_contract_for_problem(self.problem)
         self._validate()
         self._clock = clock or (lambda: datetime.now(UTC))
         self._thread_lock = threading.RLock()
@@ -918,14 +912,14 @@ class Workspace:
                 "SOLVED",
             }:
                 raise ProtocolError("another submission state currently blocks external receipt")
-            submission_id = _uuid(p["submission_id"], "submission_id")
+            submission_id = validate_submission_id(self.provider_contract, p["submission_id"])
             if submission_id in s["submission_ids"]:
                 raise ProtocolError("external submission id is already bound")
             self._result_url(p["public_result_url"], submission_id)
             self._artifact(p["receipt"], "submission receipt")
             self._external_source(
                 p["source"],
-                "trusted-clerk/conjectures.io-submission",
+                self.provider_contract["submission"]["receipt_source"],
                 p["receipt"],
                 p["public_result_url"],
             )
@@ -949,34 +943,33 @@ class Workspace:
                 raise ProtocolError("feedback is not bound to the candidate submission")
             self._result_url(p["public_result_url"], p["submission_id"])
             self._artifact(p["report"], "feedback report")
-            expected_source = {
-                "verifier": "trusted-clerk/conjectures.io-lean-verifier",
-                "review": "trusted-clerk/conjectures.io-human-review",
-                "reward": "trusted-clerk/conjectures.io-reward-eligibility",
-            }.get(p["stage"])
-            self._external_source(p["source"], expected_source, p["report"], p["public_result_url"])
+            stage = p["stage"]
+            details = stage_contract(self.provider_contract, stage)
+            expected_source = details["source"]
+            self._external_source(
+                p["source"],
+                expected_source,
+                p["report"],
+                p["public_result_url"],
+                allow_provider_observation=True,
+            )
             for key in ("reason_code", "summary", "next_action"):
                 _text(p[key], f"feedback.{key}", 2000)
-            stage, decision = p["stage"], p["decision"]
+            decision = p["decision"]
+            outcome = decision_outcome(self.provider_contract, stage, decision)
+            if outcome == "pending":
+                raise ProtocolError("pending provider state is not terminal feedback")
             if stage == "verifier":
-                if decision not in VERIFIER_DECISIONS:
-                    raise ProtocolError("invalid verifier decision")
                 if candidate["status"] != "VERIFICATION_PENDING":
                     raise ProtocolError("verifier feedback is not valid in the candidate state")
             elif stage == "review":
-                if decision not in REVIEW_DECISIONS:
-                    raise ProtocolError("invalid review decision")
                 if candidate["status"] != "REVIEW_PENDING":
                     raise ProtocolError("review feedback requires a Lean-verified candidate")
             elif stage == "reward":
-                if decision not in REWARD_DECISIONS:
-                    raise ProtocolError("invalid reward decision")
                 if candidate["status"] not in {"APPROVED", "REJECTED", "PARTIAL_AWARD"}:
                     raise ProtocolError("reward feedback requires a completed human review")
                 if candidate["reward"] is not None:
                     raise ProtocolError("reward decision is already terminal")
-            else:
-                raise ProtocolError("feedback stage must be verifier, review, or reward")
             return
         if kind == "case_resolution_recorded":
             req = common | {"resolution", "review_event_id", "note"}
@@ -988,13 +981,15 @@ class Workspace:
             if submission is None or submission["submission_id"] != p["submission_id"]:
                 raise ProtocolError("resolution is not bound to the candidate submission")
             self._result_url(p["public_result_url"], p["submission_id"])
-            if p["source"] != "trusted-clerk/conjectures.io-human-review":
+            if p["source"] != self.provider_contract["resolution"]["source"]:
                 raise ProtocolError("resolution source is invalid")
+            review_success = self.provider_contract["stages"]["review"]["success"]
             if (
                 candidate["status"] != "APPROVED"
                 or review is None
                 or review["event_id"] != p["review_event_id"]
-                or p["resolution"] != "SOLVED"
+                or review["decision"] not in review_success
+                or p["resolution"] != self.provider_contract["resolution"]["success_status"]
             ):
                 raise ProtocolError("case resolution requires the exact approved review event")
             if s["resolutions"]:
@@ -1016,19 +1011,38 @@ class Workspace:
         _text(value["ref"], f"{name}.ref", 1000)
         _sha256(value["sha256"], f"{name}.sha256")
 
-    @staticmethod
-    def _result_url(value: Any, submission_id: str) -> None:
-        if value != f"https://conjectures.io/results/{submission_id}":
+    def _result_url(self, value: Any, submission_id: str) -> None:
+        if value != result_url(self.provider_contract, submission_id):
             raise ProtocolError("public result URL must match the external submission id")
 
     @staticmethod
     def _external_source(
-        source: Any, expected: str | None, evidence: dict[str, Any], result_url: str
+        source: Any,
+        expected: str | None,
+        evidence: dict[str, Any],
+        result_url: str,
+        *,
+        allow_provider_observation: bool = False,
     ) -> None:
         if source != expected:
             raise ProtocolError("external observation source is invalid")
-        if evidence["ref"] != result_url:
+        if evidence["ref"] == result_url:
+            return
+        if not allow_provider_observation:
             raise ProtocolError("external evidence must digest the canonical public result URL")
+        evidence_url = urlsplit(evidence["ref"])
+        canonical_result = urlsplit(result_url)
+        if (
+            evidence_url.scheme != "https"
+            or evidence_url.hostname != canonical_result.hostname
+            or evidence_url.port != canonical_result.port
+            or evidence_url.username
+            or evidence_url.password
+            or evidence_url.fragment
+        ):
+            raise ProtocolError(
+                "external evidence must reference the result URL or a public same-provider URL"
+            )
 
     def _bound_candidate(self, value: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         candidate = state["candidates"].get(value.get("candidate_id"))
@@ -1150,15 +1164,19 @@ class Workspace:
                 if p["stage"] == "verifier":
                     candidate["verifier"] = feedback
                     candidate["status"] = (
-                        "REVIEW_PENDING" if p["decision"] == "VERIFIED" else "REJECTED"
+                        "REVIEW_PENDING"
+                        if decision_outcome(self.provider_contract, "verifier", p["decision"])
+                        == "success"
+                        else "REJECTED"
                     )
                 elif p["stage"] == "review":
                     candidate["review"] = feedback
-                    candidate["status"] = {
-                        "APPROVED": "APPROVED",
-                        "REJECTED": "REJECTED",
-                        "PARTIAL_AWARD": "PARTIAL_AWARD",
-                    }[p["decision"]]
+                    outcome = decision_outcome(self.provider_contract, "review", p["decision"])
+                    candidate["status"] = (
+                        "APPROVED"
+                        if outcome == "success"
+                        else ("PARTIAL_AWARD" if p["decision"] == "PARTIAL_AWARD" else "REJECTED")
+                    )
                 else:
                     candidate["reward"] = feedback
             elif k == "case_resolution_recorded":
@@ -1253,6 +1271,7 @@ class Workspace:
         }
 
     def _public(self, s: dict[str, Any], now: datetime) -> dict[str, Any]:
+        problem_status = self._problem_status(s)
         claims = [
             {
                 "claim_id": c["claim_id"],
@@ -1268,7 +1287,14 @@ class Workspace:
         ]
         return {
             "problem_id": self.problem["problem_id"],
-            "problem_status": self._problem_status(s),
+            "problem_status": problem_status,
+            "provider": {
+                "id": self.provider_contract["provider_id"],
+                "display_name": self.provider_contract["display_name"],
+                "contract_schema": self.provider_contract["schema"],
+                "definition_adapter": self.provider_contract["definition"]["adapter"],
+            },
+            "provider_resolution": provider_resolution(self.provider_contract, s, problem_status),
             "research_resume": self._research_resume(s),
             "sessions": sorted(
                 [
