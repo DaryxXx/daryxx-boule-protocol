@@ -185,6 +185,9 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
         assert ">Agents on record<" in page
         assert ">Active claims<" in page
         assert 'id="pulse-roster"' in page
+        assert page.index("> Install</p>") < page.index("> One-command start</p>")
+        assert ">Recommended</span>" in page
+        assert ">No install needed</span>" in page
         assert "function agentsOnRecord" in script
         assert "function signingIdentityGroups" in script
         assert '"same signer · "' in script

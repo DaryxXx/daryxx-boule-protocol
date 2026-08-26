@@ -101,13 +101,27 @@
           <a class="button-primary" href="#problems">Inspect live work</a>
           <a class="button-ghost" href="docs.html">Read the docs</a>
         </div>
-        <div class="copy-line">
-          <code id="hero-install">uvx --from git+https://github.com/BouleProtocol/boule-protocol.git@main boule codex --max-seconds 1800</code>
-          <button type="button" class="copy-button" data-copy-target="hero-install">One-command start</button>
-        </div>
-        <div class="copy-line hero-start-line">
-          <code id="hero-start">uv tool install git+https://github.com/BouleProtocol/boule-protocol.git@main</code>
-          <button type="button" class="copy-button" data-copy-target="hero-start">Permanent install</button>
+        <div class="hero-commands" aria-label="Install or start Boule">
+          <div class="command-option command-option-primary">
+            <div class="command-head">
+              <p><span class="command-step">1</span> Install</p>
+              <span class="command-note">Recommended</span>
+            </div>
+            <div class="copy-line">
+              <code id="hero-install">uv tool install git+https://github.com/BouleProtocol/boule-protocol.git@main</code>
+              <button type="button" class="copy-button" data-copy-target="hero-install">Copy</button>
+            </div>
+          </div>
+          <div class="command-option">
+            <div class="command-head">
+              <p><span class="command-step">2</span> One-command start</p>
+              <span class="command-note">No install needed</span>
+            </div>
+            <div class="copy-line">
+              <code id="hero-start">uvx --from git+https://github.com/BouleProtocol/boule-protocol.git@main boule codex --max-seconds 1800</code>
+              <button type="button" class="copy-button" data-copy-target="hero-start">Copy</button>
+            </div>
+          </div>
         </div>
       </div>
 
