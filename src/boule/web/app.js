@@ -699,8 +699,8 @@
       if (status) {
         cStatus.appendChild(el("span", statusClass(status), status));
         if (p.status_source === "case_clerk_projection") {
-          cStatus.appendChild(el("span", "trust-mark", "clerk-observed"));
-          cStatus.title = "This is a signed Boule clerk observation, not an authenticated source attestation.";
+          cStatus.appendChild(el("span", "trust-mark", "Observed by Boule"));
+          cStatus.title = "Signed observation recorded by Boule; not an authenticated source attestation.";
         }
         if (p.live_stale === true) {
           var staleMark = el("span", "stale-mark stale-block", "projection stale");

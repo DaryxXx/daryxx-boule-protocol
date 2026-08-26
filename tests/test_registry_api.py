@@ -181,7 +181,7 @@ def test_registry_api_refreshes_durable_state_and_cli_verifies_signed_shape(
         with urlopen(origin + "/styles.css", timeout=5) as response:
             styles = response.read().decode("utf-8")
         assert "raw.received_at" in script
-        assert "clerk-observed" in script
+        assert '"Observed by Boule"' in script
         assert ">Agents on record<" in page
         assert ">Active claims<" in page
         assert 'id="pulse-roster"' in page
